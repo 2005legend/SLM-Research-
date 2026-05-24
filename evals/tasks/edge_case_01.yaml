@@ -1,0 +1,7 @@
+id: edge_case_01
+category: edge_case
+description: "Handle empty input gracefully in the wiki search function"
+repo: fixture_simple
+expected_files_changed:
+  - local_sage/wiki/manager.py
+pass_condition: "pytest passes and no mypy errors"

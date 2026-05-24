@@ -1,0 +1,9 @@
+symbol_id: "local_sage/model/client.py::OllamaClient.generate"
+exception_types:
+  - "OllamaConnectionError"
+  - "OllamaRequestError"
+  - "OllamaTimeoutError"
+return_shape:
+  type: "ModelResponse"
+preconditions:
+  - "len(prompt) > 0"

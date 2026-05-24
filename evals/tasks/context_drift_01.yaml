@@ -1,0 +1,7 @@
+id: context_drift_01
+category: context_drift
+description: "Add type annotations to all functions in the utility module"
+repo: fixture_simple
+expected_files_changed:
+  - utils.py
+pass_condition: "mypy passes with no errors on utils.py"

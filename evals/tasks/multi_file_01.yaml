@@ -1,0 +1,8 @@
+id: multi_file_01
+category: multi_file
+description: "Add a new divide() function to calculator and update its tests"
+repo: fixture_calculator
+expected_files_changed:
+  - calculator.py
+  - test_calculator.py
+pass_condition: "pytest passes with new divide test"

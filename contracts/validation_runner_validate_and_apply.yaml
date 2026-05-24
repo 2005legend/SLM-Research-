@@ -1,0 +1,7 @@
+symbol_id: "local_sage/validation/runner.py::ValidationRunner.validate_and_apply"
+exception_types:
+  - "ValidationTimeoutError"
+return_shape:
+  type: "ValidationResult"
+preconditions:
+  - "len(patch) > 0"

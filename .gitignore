@@ -1,0 +1,27 @@
+# local-sage runtime files
+.sage/
+wiki/
+
+# Environment — contains model config, never commit secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Test / coverage
+.pytest_cache/
+.hypothesis/
+.coverage
+htmlcov/
+
+# Type checking
+.mypy_cache/
+
+# Ruff
+.ruff_cache/

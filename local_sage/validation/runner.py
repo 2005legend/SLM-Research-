@@ -1,0 +1,297 @@
+"""ValidationRunner orchestrator for Layer 6 — Validation.
+
+Provides :class:`ValidationRunner`, which coordinates all four validators
+(pytest, mypy, ruff, contracts) against a temporary copy of the repository,
+optionally prompts the user for manual review, and applies the patch to the
+real repository only when all checks pass.
+
+⚠️  This module is part of the core validation layer.
+    It REQUIRES manual human review before any task that uses it is
+    marked complete.
+"""
+
+from __future__ import annotations
+
+import time
+from pathlib import Path
+
+from local_sage.validation.contracts import ContractChecker
+from local_sage.validation.exceptions import ValidationTimeoutError  # noqa: F401
+from local_sage.validation.mypy_runner import MypyRunner
+from local_sage.validation.patcher import Patcher
+from local_sage.validation.pytest_runner import PytestRunner
+from local_sage.validation.result import (
+    ContractFailure,
+    MypyError,
+    PytestCounts,
+    RuffViolation,
+    ValidationFailure,
+    ValidationResult,
+)
+from local_sage.validation.ruff_runner import RuffRunner
+
+
+class ValidationRunner:
+    """Orchestrates all four validators and optionally applies a patch.
+
+    Runs pytest, mypy, ruff, and the contract checker against a temporary
+    copy of the repository.  The original repository is never modified until
+    all validators pass (and, if ``manual_review=True``, the user confirms).
+
+    Attributes:
+        _repo_root: Absolute path to the repository root.
+        _manual_review: If ``True``, prompt the user for ``y/n`` confirmation
+            before applying a passing patch.
+        _pytest_timeout: Maximum seconds to wait for pytest.
+        _mypy_timeout: Maximum seconds to wait for mypy.
+        _ruff_timeout: Maximum seconds to wait for ruff.
+
+    Example::
+
+        runner = ValidationRunner(repo_root=Path("/path/to/repo"))
+        result = runner.validate_only(patch_text)
+        if result.passed:
+            print("All checks passed!")
+        else:
+            print(result.to_retry_prompt())
+    """
+
+    def __init__(
+        self,
+        repo_root: Path,
+        manual_review: bool = False,
+        pytest_timeout: int = 60,
+        mypy_timeout: int = 60,
+        ruff_timeout: int = 30,
+    ) -> None:
+        """Initialise the runner with a repo root and optional configuration.
+
+        Args:
+            repo_root: Absolute path to the root of the repository to
+                validate against.
+            manual_review: If ``True``, pause after all checks pass and
+                prompt the user for ``y/n`` confirmation before applying
+                the patch.
+            pytest_timeout: Maximum seconds to wait for pytest to complete.
+            mypy_timeout: Maximum seconds to wait for mypy to complete.
+            ruff_timeout: Maximum seconds to wait for each ruff subprocess.
+        """
+        self._repo_root = repo_root
+        self._manual_review = manual_review
+        self._pytest_timeout = pytest_timeout
+        self._mypy_timeout = mypy_timeout
+        self._ruff_timeout = ruff_timeout
+
+        self._patcher = Patcher()
+        self._pytest_runner = PytestRunner()
+        self._mypy_runner = MypyRunner()
+        self._ruff_runner = RuffRunner()
+        self._contract_checker = ContractChecker()
+
+    def validate_and_apply(self, patch: str) -> ValidationResult:
+        """Run all checks and apply the patch to the repo if they pass.
+
+        Applies the patch to a temporary directory, runs all four validators,
+        and — if everything passes — applies the patch to the real repository.
+        If ``manual_review=True``, the user is prompted for confirmation
+        before the real apply step.  The temporary directory is always cleaned
+        up in a ``finally`` block.
+
+        Args:
+            patch: Unified diff string to validate and apply.
+
+        Returns:
+            A :class:`~local_sage.validation.result.ValidationResult`
+            describing the outcome of all validators.
+
+        Raises:
+            ValidationTimeoutError: If any validator subprocess times out.
+        """
+        temp_dir = self._patcher.apply_to_temp(self._repo_root, patch)
+        try:
+            result = self._run_all_checks(temp_dir)
+            if result.passed:
+                if self._manual_review:
+                    confirmed = self._prompt_manual_review(result)
+                    if not confirmed:
+                        return result  # user declined — do not apply
+                self._patcher.apply_to_repo(self._repo_root, patch)
+            return result
+        finally:
+            self._patcher.revert(temp_dir)
+
+    def validate_only(self, patch: str) -> ValidationResult:
+        """Run all checks without applying the patch to the repository.
+
+        Applies the patch to a temporary directory, runs all four validators,
+        and returns the result.  The real repository is never modified.  The
+        temporary directory is always cleaned up in a ``finally`` block.
+
+        Args:
+            patch: Unified diff string to validate.
+
+        Returns:
+            A :class:`~local_sage.validation.result.ValidationResult`
+            describing the outcome of all validators.
+
+        Raises:
+            ValidationTimeoutError: If any validator subprocess times out.
+        """
+        temp_dir = self._patcher.apply_to_temp(self._repo_root, patch)
+        try:
+            return self._run_all_checks(temp_dir)
+        finally:
+            self._patcher.revert(temp_dir)
+
+    def _run_all_checks(self, temp_dir: Path) -> ValidationResult:
+        """Run all four validators against *temp_dir* and aggregate results.
+
+        All four validators are always attempted regardless of individual
+        failures.  Only ``ValidationTimeoutError`` causes early exit.
+        Contract YAML files are read from ``self._repo_root``, not temp_dir.
+
+        Args:
+            temp_dir: Patched copy of the repository to validate against.
+
+        Returns:
+            Aggregated :class:`~local_sage.validation.result.ValidationResult`.
+
+        Raises:
+            ValidationTimeoutError: If any validator subprocess times out.
+        """
+        start_ms = int(time.time() * 1000)
+        failures: list[ValidationFailure] = []
+
+        pytest_counts = self._run_pytest(temp_dir, failures)
+        mypy_errors = self._run_mypy(temp_dir, failures)
+        ruff_violations = self._run_ruff(temp_dir, failures)
+        contract_failures = self._run_contracts(failures)
+
+        duration_ms = int(time.time() * 1000) - start_ms
+        return ValidationResult(
+            passed=len(failures) == 0,
+            failures=failures,
+            pytest_counts=pytest_counts,
+            mypy_errors=mypy_errors,
+            ruff_violations=ruff_violations,
+            contract_failures=contract_failures,
+            duration_ms=duration_ms,
+        )
+
+    def _run_pytest(
+        self, temp_dir: Path, failures: list[ValidationFailure]
+    ) -> PytestCounts | None:
+        """Run pytest and append any failure to *failures*.
+
+        Args:
+            temp_dir: Directory to run pytest in.
+            failures: Mutable list to append failures to.
+
+        Returns:
+            ``PytestCounts`` or ``None`` on timeout (which re-raises).
+
+        Raises:
+            ValidationTimeoutError: If pytest times out.
+        """
+
+        counts = self._pytest_runner.run(temp_dir, self._pytest_timeout)
+        if counts.failed > 0 or counts.errors > 0:
+            failures.append(
+                ValidationFailure(
+                    tool="pytest",
+                    message=f"{counts.failed} failed, {counts.errors} errors",
+                )
+            )
+        return counts
+
+    def _run_mypy(
+        self, temp_dir: Path, failures: list[ValidationFailure]
+    ) -> list[MypyError] | None:
+        """Run mypy and append any failure to *failures*.
+
+        Args:
+            temp_dir: Directory to run mypy in.
+            failures: Mutable list to append failures to.
+
+        Returns:
+            List of ``MypyError`` objects.
+
+        Raises:
+            ValidationTimeoutError: If mypy times out.
+        """
+        errors = self._mypy_runner.run(temp_dir, self._mypy_timeout)
+        if errors:
+            failures.append(
+                ValidationFailure(
+                    tool="mypy",
+                    message=f"{len(errors)} type error(s)",
+                )
+            )
+        return errors
+
+    def _run_ruff(
+        self, temp_dir: Path, failures: list[ValidationFailure]
+    ) -> list[RuffViolation] | None:
+        """Run ruff check and format and append any failure to *failures*.
+
+        Args:
+            temp_dir: Directory to run ruff in.
+            failures: Mutable list to append failures to.
+
+        Returns:
+            List of ``RuffViolation`` objects.
+
+        Raises:
+            ValidationTimeoutError: If ruff times out.
+        """
+        violations = self._ruff_runner.run(temp_dir, self._ruff_timeout)
+        if violations:
+            failures.append(
+                ValidationFailure(
+                    tool="ruff",
+                    message=f"{len(violations)} violation(s)",
+                )
+            )
+        return violations
+
+    def _run_contracts(
+        self, failures: list[ValidationFailure]
+    ) -> list[ContractFailure] | None:
+        """Run contract checker against repo_root and append failures.
+
+        Contract YAML files live in repo_root/contracts/ — always pass
+        self._repo_root, never temp_dir.
+
+        Args:
+            failures: Mutable list to append failures to.
+
+        Returns:
+            List of ``ContractFailure`` objects.
+        """
+        contract_failures = self._contract_checker.check(self._repo_root)
+        if contract_failures:
+            failures.append(
+                ValidationFailure(
+                    tool="contracts",
+                    message=f"{len(contract_failures)} contract failure(s)",
+                )
+            )
+        return contract_failures
+
+    def _prompt_manual_review(self, result: ValidationResult) -> bool:
+        """Prompt the user for y/n confirmation before applying the patch.
+
+        Prints the validation result summary and waits for user input.
+        Returns ``True`` only if the user explicitly types ``y``.
+
+        Args:
+            result: The completed :class:`~local_sage.validation.result.ValidationResult`
+                to display before prompting.
+
+        Returns:
+            ``True`` if the user confirms with ``"y"`` (case-insensitive),
+            ``False`` for any other input including empty input.
+        """
+        print(result.to_retry_prompt() if not result.passed else "Validation passed.")
+        response = input("Apply patch? [y/N]: ").strip().lower()
+        return response == "y"

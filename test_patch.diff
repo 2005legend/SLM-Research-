@@ -1,0 +1,8 @@
+--- a/local_sage/config.py
++++ b/local_sage/config.py
+@@ -1,4 +1,4 @@
+-"""Configuration management for local-sage.
++"""Configuration management for local-sage — updated.
+ 
+ Loads ``SageConfig`` from (in priority order):
+ 1. Environment variables prefixed with ``SAGE_`` (highest priority).
