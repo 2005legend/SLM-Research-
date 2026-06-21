@@ -1,7 +1,7 @@
 id: contract_violation_01
 category: contract_violation
-description: "Fix a function that raises ValueError instead of the contracted OllamaError"
-repo: fixture_simple
+description: "Fix divide() to raise ZeroDivisionError instead of returning inf"
+repo: simple_api
 expected_files_changed:
-  - local_sage/model/client.py
-pass_condition: "no ContractFailure for OllamaClient.generate in validation output"
+  - simple_api/core.py
+pass_condition: "pytest tests/test_after.py -x"

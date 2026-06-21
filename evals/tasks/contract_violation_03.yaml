@@ -1,0 +1,7 @@
+id: contract_violation_03
+category: contract_violation
+description: "Fix average() to raise ValueError on empty input per contract"
+repo: data_processor
+expected_files_changed:
+  - data_processor/processor.py
+pass_condition: "pytest tests/test_after.py -x"

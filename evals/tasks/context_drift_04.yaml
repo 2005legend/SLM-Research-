@@ -1,0 +1,7 @@
+id: context_drift_04
+category: context_drift
+description: "Infer correct fix from failing test_before.py in data_processor"
+repo: data_processor
+expected_files_changed:
+  - data_processor/processor.py
+pass_condition: "pytest tests/test_before.py tests/test_after.py -x"

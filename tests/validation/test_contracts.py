@@ -277,8 +277,8 @@ class TestCheckExceptionTypes:
         failures = checker.check(tmp_path)
         assert failures == []
 
-    def test_skips_missing_source_file_gracefully(self, tmp_path: Path) -> None:
-        """check() returns [] when the source file referenced by a contract is missing."""
+    def test_missing_source_file_returns_contract_failure(self, tmp_path: Path) -> None:
+        """check() returns source_file_not_found when contract source is missing."""
         _write_contract(
             tmp_path / "contracts",
             "c",
@@ -286,9 +286,9 @@ class TestCheckExceptionTypes:
             ["AllowedError"],
         )
         checker = ContractChecker()
-        # Should not raise — just skip
         failures = checker.check(tmp_path)
-        assert failures == []
+        assert len(failures) == 1
+        assert failures[0].constraint == "source_file_not_found"
 
     def test_contract_failure_has_correct_symbol_id(self, tmp_path: Path) -> None:
         """ContractFailure.symbol_id matches the contract's symbol_id."""
@@ -369,3 +369,149 @@ def test_property_22_contract_checker_detects_exception_violations(
         assert len(failures) >= 1
         assert any(f.constraint == "exception_types" for f in failures)
         assert any(disallowed_name in f.actual for f in failures)
+
+
+# ---------------------------------------------------------------------------
+# Property 7: ContractChecker never silently passes a missing source file
+# ---------------------------------------------------------------------------
+
+
+@given(symbol_id=st.text(min_size=1, max_size=50))
+@settings(max_examples=100)
+def test_property_7a_check_exception_types_missing_file(symbol_id: str) -> None:
+    """Property 7 (_check_exception_types): missing source file always yields source_file_not_found.
+
+    For any contract whose source file does not exist on disk,
+    ContractChecker._check_exception_types() SHALL return a non-empty list whose
+    first element has constraint == "source_file_not_found".
+
+    **Validates: Requirements 4.1, 4.2**
+    """
+    import tempfile
+
+    from local_sage.validation.contracts import Contract
+
+    with tempfile.TemporaryDirectory() as tmp:
+        repo_dir = Path(tmp)
+
+        # Build a Contract whose source_file points to a path that definitely does not exist.
+        contract = Contract(
+            symbol_id=symbol_id,
+            exception_types=["ValueError"],
+            return_shape=None,
+            source_file=Path("nonexistent_dir") / "nonexistent_file.py",
+            function_name="func",
+        )
+
+        checker = ContractChecker()
+        result = checker._check_exception_types(contract, repo_dir)
+
+        assert len(result) >= 1
+        assert result[0].constraint == "source_file_not_found"
+
+
+@given(symbol_id=st.text(min_size=1, max_size=50))
+@settings(max_examples=100)
+def test_property_7b_check_return_shape_missing_file(symbol_id: str) -> None:
+    """Property 7 (_check_return_shape): missing source file always yields source_file_not_found.
+
+    For any contract whose source file does not exist on disk,
+    ContractChecker._check_return_shape() SHALL return a non-empty list whose
+    first element has constraint == "source_file_not_found".
+
+    **Validates: Requirements 4.3**
+    """
+    import tempfile
+
+    from local_sage.validation.contracts import Contract
+
+    with tempfile.TemporaryDirectory() as tmp:
+        repo_dir = Path(tmp)
+
+        contract = Contract(
+            symbol_id=symbol_id,
+            exception_types=[],
+            return_shape={"type": "str"},
+            source_file=Path("nonexistent_dir") / "nonexistent_file.py",
+            function_name="func",
+        )
+
+        checker = ContractChecker()
+        result = checker._check_return_shape(contract, repo_dir)
+
+        assert len(result) >= 1
+        assert result[0].constraint == "source_file_not_found"
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for Property 7 supplementary coverage
+# ---------------------------------------------------------------------------
+
+
+class TestMissingSourceFile:
+    """Unit tests verifying missing-file behaviour on both internal methods and check()."""
+
+    def test_check_exception_types_existing_file_no_source_file_not_found(
+        self, tmp_path: Path
+    ) -> None:
+        """_check_exception_types() does NOT return source_file_not_found for an existing file."""
+        from local_sage.validation.contracts import Contract
+
+        source = "def func():\n    return 1\n"
+        _write_source(tmp_path, "pkg/module.py", source)
+
+        contract = Contract(
+            symbol_id="pkg/module.py::func",
+            exception_types=["ValueError"],
+            return_shape=None,
+            source_file=Path("pkg/module.py"),
+            function_name="func",
+        )
+
+        checker = ContractChecker()
+        result = checker._check_exception_types(contract, tmp_path)
+
+        # The file exists, so we must NOT see a source_file_not_found failure.
+        assert not any(f.constraint == "source_file_not_found" for f in result)
+
+    def test_check_return_shape_existing_file_no_source_file_not_found(
+        self, tmp_path: Path
+    ) -> None:
+        """_check_return_shape() does NOT return source_file_not_found for an existing file."""
+        from local_sage.validation.contracts import Contract
+
+        source = "def func() -> str:\n    return 'hello'\n"
+        _write_source(tmp_path, "pkg/module.py", source)
+
+        contract = Contract(
+            symbol_id="pkg/module.py::func",
+            exception_types=[],
+            return_shape={"type": "str"},
+            source_file=Path("pkg/module.py"),
+            function_name="func",
+        )
+
+        checker = ContractChecker()
+        result = checker._check_return_shape(contract, tmp_path)
+
+        assert not any(f.constraint == "source_file_not_found" for f in result)
+
+    def test_check_full_pipeline_missing_source_returns_failures(self, tmp_path: Path) -> None:
+        """ContractChecker.check() returns failures (not an empty list) for a missing source file.
+
+        This tests the full public API: when the YAML contract references a file that
+        does not exist, check() must return at least one ContractFailure.
+        """
+        _write_contract(
+            tmp_path / "contracts",
+            "missing_file_contract",
+            "nonexistent/path.py::some_func",
+            ["ValueError"],
+        )
+
+        checker = ContractChecker()
+        failures = checker.check(tmp_path)
+
+        # Must not be empty — the missing file must surface as a failure.
+        assert len(failures) >= 1
+        assert any(f.constraint == "source_file_not_found" for f in failures)

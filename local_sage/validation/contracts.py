@@ -256,8 +256,13 @@ class ContractChecker:
             return []
         source_path = repo_dir / contract.source_file
         if not source_path.is_file():
-            logger.warning("Contract source file not found: %s — skipping", source_path)
-            return []
+            return [
+                ContractFailure(
+                    symbol_id=contract.symbol_id,
+                    constraint="source_file_not_found",
+                    actual=str(source_path),
+                )
+            ]
         try:
             tree = ast.parse(source_path.read_text(encoding="utf-8"))
         except SyntaxError as exc:
@@ -386,6 +391,15 @@ class ContractChecker:
         """
         if not contract.return_shape or "type" not in contract.return_shape:
             return []
+        source_path = repo_dir / contract.source_file
+        if not source_path.is_file():
+            return [
+                ContractFailure(
+                    symbol_id=contract.symbol_id,
+                    constraint="source_file_not_found",
+                    actual=str(source_path),
+                )
+            ]
         expected_type = str(contract.return_shape["type"])
         try:
             func_obj = self._import_function(contract, repo_dir)

@@ -1,0 +1,7 @@
+id: edge_case_05
+category: edge_case
+description: "Handle negative divisor edge case in divide()"
+repo: simple_api
+expected_files_changed:
+  - simple_api/core.py
+pass_condition: "pytest tests/test_after.py::test_divide_normal_case -x"

@@ -1,0 +1,7 @@
+id: contract_violation_04
+category: contract_violation
+description: "Align average() exception type with processor contract"
+repo: data_processor
+expected_files_changed:
+  - data_processor/processor.py
+pass_condition: "pytest tests/test_after.py::test_average_empty_raises -x"

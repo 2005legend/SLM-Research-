@@ -1,0 +1,7 @@
+id: contract_violation_05
+category: contract_violation
+description: "Fix both divide() and average() to satisfy contract exception_types"
+repo: simple_api
+expected_files_changed:
+  - simple_api/core.py
+pass_condition: "pytest tests/test_after.py tests/test_before.py -x"

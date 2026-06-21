@@ -78,7 +78,7 @@ class TestValidateCommand:
             patch("local_sage.validation.runner.ValidationRunner") as MockRunner,
         ):
             MockRunner.return_value.validate_only.return_value = _passing_result()
-            result = runner.invoke(app, ["validate", "--patch", str(patch_file)])
+            result = runner.invoke(app, ["validate", str(patch_file)])
 
         assert result.exit_code == 0
 
@@ -92,7 +92,7 @@ class TestValidateCommand:
             patch("local_sage.validation.runner.ValidationRunner") as MockRunner,
         ):
             MockRunner.return_value.validate_only.return_value = _failing_result()
-            result = runner.invoke(app, ["validate", "--patch", str(patch_file)])
+            result = runner.invoke(app, ["validate", str(patch_file)])
 
         assert result.exit_code != 0
 
@@ -100,7 +100,7 @@ class TestValidateCommand:
         """sage validate exits non-zero when the patch file does not exist."""
         with patch("local_sage.cli.Path.cwd", return_value=tmp_path):
             result = runner.invoke(
-                app, ["validate", "--patch", str(tmp_path / "nonexistent.patch")]
+                app, ["validate", str(tmp_path / "nonexistent.patch")]
             )
 
         assert result.exit_code != 0
@@ -116,7 +116,7 @@ class TestValidateCommand:
         ):
             mock_instance = MockRunner.return_value
             mock_instance.validate_only.return_value = _passing_result()
-            runner.invoke(app, ["validate", "--patch", str(patch_file)])
+            runner.invoke(app, ["validate", str(patch_file)])
 
         # validate_only should be called, NOT validate_and_apply
         mock_instance.validate_only.assert_called_once()
@@ -244,7 +244,7 @@ class TestStatusCommand:
 def test_property_1_validate_only_never_modifies_repo(patch_content: str) -> None:
     """Property 1: Validate-only mode never modifies the repository.
 
-    For any patch file passed to `sage validate --patch <path>`, the
+    For any patch file passed to `sage validate <path>`, the
     repository files on disk SHALL be identical before and after the command
     completes, regardless of whether the patch passes or fails validation.
 
@@ -270,7 +270,7 @@ def test_property_1_validate_only_never_modifies_repo(patch_content: str) -> Non
         ):
             # Alternate between passing and failing results
             MockRunner.return_value.validate_only.return_value = _passing_result()
-            runner.invoke(app, ["validate", "--patch", str(patch_file)])
+            runner.invoke(app, ["validate", str(patch_file)])
 
         # Sentinel file must be unchanged
         assert sentinel.read_text(encoding="utf-8") == original_content

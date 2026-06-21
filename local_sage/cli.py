@@ -1,4 +1,4 @@
-"""Layer 0 — CLI: Typer application with all sage subcommands.
+﻿"""Layer 0 â€” CLI: Typer application with all sage subcommands.
 
 All commands are thin wrappers that delegate to the appropriate layer.
 Rich is used for all terminal output.
@@ -7,7 +7,14 @@ Rich is used for all terminal output.
 from __future__ import annotations
 
 import asyncio
+import warnings
 from pathlib import Path
+
+# Suppress upstream LangGraph / LangChain deprecation warnings at runtime.
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="langchain_core.*")
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="langgraph.*")
+warnings.filterwarnings("ignore", category=PendingDeprecationWarning, module="langchain_core.*")
+warnings.filterwarnings("ignore", category=PendingDeprecationWarning, module="langgraph.*")
 
 import typer
 from rich.console import Console
@@ -39,43 +46,234 @@ app.add_typer(memory_app, name="memory")
 
 @app.command()
 def start() -> None:
-    """Boot the agent, index the repo, and load the latest session."""
+    """Boot the agent, index the repo, and enter the interactive task loop."""
     config = load_config()
     repo_root = Path.cwd()
     console.print("[bold green]Starting local-sage...[/bold green]")
 
-    # Index the repository
-    from local_sage.repo_graph.indexer import RepoIndexer
+    graph, session_id, session_manager = _boot(config, repo_root)
 
+    node_count = len(list(graph._graph.nodes))
+    console.print(
+        Panel(
+            f"[green][OK] Ready[/green]\nIndexed [bold]{node_count}[/bold] symbols\nSession loaded\n\n"
+            "[dim]Type a task to run it.  Commands: [bold]status[/bold] Â· "
+            "[bold]history[/bold] Â· [bold]quit[/bold][/dim]",
+            title="local-sage",
+        )
+    )
+    _repl(config, repo_root, session_id, session_manager)
+
+
+def _boot(config: object, repo_root: Path) -> tuple:
+    """Index the repo and load/create a session.
+
+    Args:
+        config: Loaded SageConfig.
+        repo_root: Repository root directory.
+
+    Returns:
+        Tuple of (SymbolGraph, session_id, SessionManager).
+    """
+    from local_sage.memory.session import SessionManager
+    from local_sage.repo_graph.indexer import RepoIndexer
+    from local_sage.config import SageConfig
+
+    assert isinstance(config, SageConfig)
     indexer = RepoIndexer()
     cache_path = repo_root / config.sage_dir / "index.json"
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-
     with console.status("Indexing repository..."):
         graph = indexer.load_index(cache_path)
         if graph is None:
             graph = indexer.index_repo(repo_root)
             indexer.save_index(graph, cache_path)
 
-    # Load or create session
-    from local_sage.memory.session import SessionManager
-
     db_path = repo_root / config.sage_dir / "memory.db"
-    session_manager = SessionManager(db_path)
-    session = session_manager.load_latest_session(repo_root)
+    sm = SessionManager(db_path)
+    session = sm.load_latest_session(repo_root)
     if session is None:
-        session_id = session_manager.create_session(repo_root)
+        session_id = sm.create_session(repo_root)
         console.print(f"[dim]New session created: {session_id}[/dim]")
     else:
-        console.print(f"[dim]Resumed session: {session.session_id}[/dim]")
+        session_id = session.session_id
+        console.print(f"[dim]Resumed session: {session_id}[/dim]")
+    return graph, session_id, sm
 
-    node_count = len(list(graph._graph.nodes))
+
+def _repl(
+    config: object,
+    repo_root: Path,
+    session_id: str,
+    session_manager: object,
+) -> None:
+    """Run the interactive task REPL loop.
+
+    Args:
+        config: Loaded SageConfig.
+        repo_root: Repository root directory.
+        session_id: Active session ID.
+        session_manager: Initialised SessionManager.
+    """
+    console.rule("[dim]interactive mode[/dim]")
+    while True:
+        try:
+            user_input = input("sage â€º ").strip()
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[dim]Goodbye.[/dim]")
+            break
+        if not user_input:
+            continue
+        if _handle_repl_command(user_input, config, repo_root, session_id, session_manager):
+            break
+
+
+def _handle_repl_command(
+    user_input: str,
+    config: object,
+    repo_root: Path,
+    session_id: str,
+    session_manager: object,
+) -> bool:
+    """Dispatch one line of REPL input. Returns True if the loop should exit.
+
+    Args:
+        user_input: Raw text typed by the user.
+        config: Loaded SageConfig.
+        repo_root: Repository root directory.
+        session_id: Active session ID.
+        session_manager: Initialised SessionManager.
+
+    Returns:
+        True if the user wants to quit, False to continue.
+    """
+    cmd = user_input.lower()
+    if cmd in ("quit", "exit", "q"):
+        console.print("[dim]Goodbye.[/dim]")
+        return True
+    if cmd == "status":
+        _print_repl_status(session_manager, session_id, repo_root, config)
+    elif cmd == "history":
+        _print_repl_history(session_manager, session_id)
+    elif cmd == "help":
+        console.print(
+            "[dim]Commands: [bold]status[/bold] Â· [bold]history[/bold] Â· "
+            "[bold]quit[/bold]  â€” or just type a task description[/dim]"
+        )
+    else:
+        _run_repl_task(user_input, config, repo_root, session_id)
+    return False
+
+
+def _run_repl_task(description: str, config: object, repo_root: Path, session_id: str) -> None:
+    """Run one task inside the REPL and print the result.
+
+    Args:
+        description: Natural-language task description from the user.
+        config: Loaded SageConfig.
+        repo_root: Repository root directory.
+        session_id: Active session ID.
+    """
+    from local_sage.orchestration.graph import build_graph
+    from local_sage.orchestration.state import AgentState
+
+    with console.status(f"[cyan]Running:[/cyan] {description}"):
+        graph_obj = build_graph()
+        initial_state = AgentState(
+            task=description,
+            max_retries=config.max_retries,  # type: ignore[attr-defined]
+            session_id=session_id,
+        )
+        final_state = graph_obj.invoke(initial_state)  # type: ignore[attr-defined]
+
+    result = (
+        final_state.get("validation_result")
+        if isinstance(final_state, dict)
+        else getattr(final_state, "validation_result", None)
+    )
+    if result and result.passed:
+        console.print("[bold green][OK] Validation passed â€” patch written to disk.[/bold green]")
+    else:
+        console.print("[bold red]âœ— Validation failed â€” no changes made.[/bold red]")
+        if result:
+            console.print(result.to_retry_prompt())
+
+    console.rule()
+
+
+def _print_repl_status(
+    session_manager: object,
+    session_id: str,
+    repo_root: Path,
+    config: object,
+) -> None:
+    """Print a compact session status inside the REPL.
+
+    Args:
+        session_manager: Initialised SessionManager.
+        session_id: Active session ID.
+        repo_root: Repository root directory.
+        config: Loaded SageConfig.
+    """
+    from local_sage.config import SageConfig
+    from local_sage.memory.session import SessionManager
+
+    assert isinstance(config, SageConfig)
+    assert isinstance(session_manager, SessionManager)
+    summary = session_manager.get_session_summary(session_id)
+    index_info = _repl_index_info(repo_root, config)
     console.print(
         Panel(
-            f"[green]✓ Ready[/green]\nIndexed [bold]{node_count}[/bold] symbols\nSession loaded",
-            title="local-sage",
+            f"Session  [bold]{session_id[:8]}â€¦[/bold]\n"
+            f"Tasks    [bold]{summary.task_count}[/bold]\n"
+            f"Tokens   [bold]{summary.prompt_tokens}[/bold] prompt / "
+            f"[bold]{summary.completion_tokens}[/bold] completion\n"
+            f"Est cost [bold]${summary.estimated_cost_usd:.4f}[/bold]  "
+            f"Actual [bold]${summary.actual_cost_usd:.4f}[/bold]\n"
+            f"Index    {index_info}",
+            title="status",
         )
     )
+
+
+def _repl_index_info(repo_root: Path, config: object) -> str:
+    """Return a human-readable index stats string for the REPL status panel.
+
+    Args:
+        repo_root: Repository root directory.
+        config: Loaded SageConfig.
+
+    Returns:
+        Formatted string with symbol and edge counts.
+    """
+    import json
+
+    from local_sage.config import SageConfig
+
+    assert isinstance(config, SageConfig)
+    cache_path = repo_root / config.sage_dir / "index.json"
+    if not cache_path.exists():
+        return "[dim]not indexed[/dim]"
+    raw = json.loads(cache_path.read_text(encoding="utf-8"))
+    return f"{len(raw.get('nodes', []))} symbols, {len(raw.get('edges', []))} edges"
+
+
+def _print_repl_history(session_manager: object, session_id: str) -> None:
+    """Print recent observations recorded for this session.
+
+    Args:
+        session_manager: Initialised SessionManager.
+        session_id: Active session ID.
+    """
+    from local_sage.memory.session import SessionManager
+
+    assert isinstance(session_manager, SessionManager)
+    summary = session_manager.get_session_summary(session_id)
+    if not summary.observations:
+        console.print("[dim]No observations recorded yet.[/dim]")
+        return
+    for i, obs in enumerate(summary.observations[-10:], 1):
+        console.print(f"  [dim]{i}.[/dim] {obs}")
 
 
 # ---------------------------------------------------------------------------
@@ -114,9 +312,9 @@ def task(description: str = typer.Argument(..., help="Task description")) -> Non
         else getattr(final_state, "validation_result", None)
     )
     if result and result.passed:
-        console.print("[bold green]✓ Task completed and patch applied.[/bold green]")
+        console.print("[bold green][OK] Task completed and patch applied.[/bold green]")
     else:
-        console.print("[bold red]✗ Task failed — no patch applied.[/bold red]")
+        console.print("[bold red]âœ— Task failed â€” no patch applied.[/bold red]")
         if result:
             console.print(result.to_retry_prompt())
 
@@ -128,7 +326,7 @@ def task(description: str = typer.Argument(..., help="Task description")) -> Non
 
 @app.command()
 def validate(
-    patch: Path = typer.Option(..., "--patch", help="Path to the patch file"),  # noqa: B008
+    patch_path: Path = typer.Argument(..., help="Path to the patch file"),  # noqa: B008
 ) -> None:
     """Validate a patch file without applying it to the repository."""
     config = load_config()
@@ -136,11 +334,11 @@ def validate(
 
     from local_sage.validation.runner import ValidationRunner
 
-    if not patch.exists():
-        console.print(f"[red]Patch file not found: {patch}[/red]")
+    if not patch_path.exists():
+        console.print(f"[red]Patch file not found: {patch_path}[/red]")
         raise typer.Exit(code=1)
 
-    patch_text = patch.read_text(encoding="utf-8")
+    patch_text = patch_path.read_text(encoding="utf-8")
     runner = ValidationRunner(
         repo_root=repo_root,
         manual_review=False,
@@ -153,9 +351,9 @@ def validate(
         result = runner.validate_only(patch_text)
 
     if result.passed:
-        console.print("[bold green]✓ All checks passed.[/bold green]")
+        console.print("[bold green][OK] All checks passed.[/bold green]")
     else:
-        console.print("[bold red]✗ Validation failed.[/bold red]")
+        console.print("[bold red]âœ— Validation failed.[/bold red]")
         console.print(result.to_retry_prompt())
         raise typer.Exit(code=1)
 
@@ -209,7 +407,7 @@ def _get_model_status() -> str:
 
     client = OllamaClient()
     online = asyncio.run(client.health_check())
-    return "[green]✓ online[/green]" if online else "[red]✗ offline[/red]"
+    return "[green][OK] online[/green]" if online else "[red][X] offline[/red]"
 
 
 def _get_index_info(repo_root: Path, config: object) -> str:
@@ -229,7 +427,7 @@ def _get_index_info(repo_root: Path, config: object) -> str:
     assert isinstance(config, SageConfig)
     cache_path = repo_root / config.sage_dir / "index.json"
     if not cache_path.exists():
-        return "[dim]not indexed — run `sage start`[/dim]"
+        return "[dim]not indexed â€” run `sage start`[/dim]"
     raw = json.loads(cache_path.read_text(encoding="utf-8"))
     node_count = len(raw.get("nodes", []))
     edge_count = len(raw.get("edges", []))
@@ -252,13 +450,17 @@ def _get_session_info(repo_root: Path, config: object) -> str:
     assert isinstance(config, SageConfig)
     db_path = repo_root / config.sage_dir / "memory.db"
     if not db_path.exists():
-        return "[dim]no session — run `sage start`[/dim]"
+        return "[dim]no session â€” run `sage start`[/dim]"
     sm = SessionManager(db_path)
     session = sm.load_latest_session(repo_root)
     if not session:
-        return "[dim]no session — run `sage start`[/dim]"
+        return "[dim]no session â€” run `sage start`[/dim]"
     summary = sm.get_session_summary(session.session_id)
-    return f"ID: {session.session_id[:8]}… | {summary.task_count} tasks"
+    return (
+        f"ID: {session.session_id[:8]}â€¦ | {summary.task_count} tasks | "
+        f"{summary.prompt_tokens} prompt / {summary.completion_tokens} completion tokens | "
+        f"est. ${summary.estimated_cost_usd:.4f} | actual ${summary.actual_cost_usd:.4f}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -286,12 +488,16 @@ def memory_show() -> None:
         raise typer.Exit(code=1)
 
     summary = sm.get_session_summary(session.session_id)
-    table = Table(title=f"Session: {session.session_id[:8]}…")
+    table = Table(title=f"Session: {session.session_id[:8]}â€¦")
     table.add_column("Field", style="bold")
     table.add_column("Value")
     table.add_row("Session ID", session.session_id)
     table.add_row("Tasks completed", str(summary.task_count))
     table.add_row("Files patched", str(summary.patch_count))
+    table.add_row("Prompt tokens", str(summary.prompt_tokens))
+    table.add_row("Completion tokens", str(summary.completion_tokens))
+    table.add_row("Estimated cost (USD)", f"{summary.estimated_cost_usd:.6f}")
+    table.add_row("Actual cost (USD)", f"{summary.actual_cost_usd:.6f}")
     table.add_row("Last active", str(summary.last_active))
     if summary.observations:
         table.add_row("Observations", "\n".join(summary.observations[:5]))

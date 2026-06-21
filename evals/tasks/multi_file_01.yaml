@@ -1,8 +1,8 @@
 id: multi_file_01
 category: multi_file
-description: "Add a new divide() function to calculator and update its tests"
-repo: fixture_calculator
+description: "Fix divide() and add module-level docstring update"
+repo: simple_api
 expected_files_changed:
-  - calculator.py
-  - test_calculator.py
-pass_condition: "pytest passes with new divide test"
+  - simple_api/core.py
+  - simple_api/__init__.py
+pass_condition: "pytest tests/test_after.py -x"

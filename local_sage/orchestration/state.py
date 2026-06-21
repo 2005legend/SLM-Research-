@@ -50,6 +50,7 @@ class AgentState:
     context_symbols: list[SymbolInfo] = field(default_factory=list)
     wiki_context: list[WikiEntry] = field(default_factory=list)
     patch: str | None = None
+    sr_blocks: list = field(default_factory=list)  # SearchReplaceBlock list
     validation_result: ValidationResult | None = None
     retry_count: int = 0
     max_retries: int = 3

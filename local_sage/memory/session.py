@@ -30,6 +30,9 @@ logger = logging.getLogger(__name__)
 # Path to the SQL schema file, relative to this module.
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
+# Estimated cost per token in USD (proxy rate for local models).
+COST_PER_TOKEN = 0.000_002
+
 
 # ---------------------------------------------------------------------------
 # Dataclasses
@@ -64,6 +67,10 @@ class SessionSummary:
         last_active: UTC timestamp of the most recent test result, or the
             session's ``updated_at`` if no test results exist.
         observations: List of decision descriptions recorded for the session.
+        prompt_tokens: Total prompt tokens across all recorded tasks.
+        completion_tokens: Total completion tokens across all recorded tasks.
+        estimated_cost_usd: Estimated cost from token counts and COST_PER_TOKEN.
+        actual_cost_usd: Actual cost in USD (always 0.0 for local models).
     """
 
     session_id: str
@@ -71,6 +78,10 @@ class SessionSummary:
     patch_count: int
     last_active: datetime
     observations: list[str]
+    prompt_tokens: int
+    completion_tokens: int
+    estimated_cost_usd: float
+    actual_cost_usd: float
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +170,8 @@ class SessionManager:
         task: str,
         patch: str,
         result: Any,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
     ) -> None:
         """Record a completed task attempt in the database.
 
@@ -170,6 +183,8 @@ class SessionManager:
             task: Human-readable task description.
             patch: Unified diff string produced by the code generator.
             result: A ``ValidationResult``-like object with ``passed`` bool.
+            prompt_tokens: Number of prompt tokens used for this task.
+            completion_tokens: Number of completion tokens used for this task.
 
         Raises:
             SessionNotFoundError: If *session_id* does not exist.
@@ -177,20 +192,37 @@ class SessionManager:
         """
         self._assert_session_exists(session_id)
         now = _utcnow_iso()
-        failures_json = _serialise_failures(result)
-        passed_int = 1 if result.passed else 0
-        file_paths = _extract_file_paths(patch)
         conn = self._connect()
         try:
-            self._insert_file_changes(conn, session_id, file_paths, patch, now)
-            self._insert_test_result(conn, session_id, passed_int, failures_json, now)
-            conn.execute(
-                "UPDATE sessions SET updated_at = ? WHERE id = ?",
-                (now, session_id),
+            self._persist_task_record(
+                conn, session_id, patch, result, now, prompt_tokens, completion_tokens
             )
             conn.commit()
         finally:
             conn.close()
+
+    def _persist_task_record(
+        self,
+        conn: sqlite3.Connection,
+        session_id: str,
+        patch: str,
+        result: Any,
+        now: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+    ) -> None:
+        """Write file_changes and test_results rows for one task."""
+        failures_json = _serialise_failures(result)
+        passed_int = 1 if result.passed else 0
+        file_paths = _extract_file_paths(patch)
+        self._insert_file_changes(conn, session_id, file_paths, patch, now)
+        self._insert_test_result(
+            conn, session_id, passed_int, failures_json, now, prompt_tokens, completion_tokens
+        )
+        conn.execute(
+            "UPDATE sessions SET updated_at = ? WHERE id = ?",
+            (now, session_id),
+        )
 
     def _insert_file_changes(
         self,
@@ -223,6 +255,8 @@ class SessionManager:
         passed_int: int,
         failures_json: str | None,
         now: str,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
     ) -> None:
         """Insert a single test_results row.
 
@@ -232,11 +266,14 @@ class SessionManager:
             passed_int: 1 if passed, 0 if failed.
             failures_json: JSON-serialised failures list or None.
             now: ISO-8601 timestamp string.
+            prompt_tokens: Prompt tokens used for this task.
+            completion_tokens: Completion tokens used for this task.
         """
         conn.execute(
-            "INSERT INTO test_results (session_id, passed, failures, recorded_at) "
-            "VALUES (?, ?, ?, ?)",
-            (session_id, passed_int, failures_json, now),
+            "INSERT INTO test_results "
+            "(session_id, passed, failures, recorded_at, prompt_tokens, completion_tokens) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (session_id, passed_int, failures_json, now, prompt_tokens, completion_tokens),
         )
 
     def record_observation(self, session_id: str, observation: str) -> None:
@@ -290,6 +327,10 @@ class SessionManager:
             patch_count=counts["patch_count"],
             last_active=counts["last_active"],
             observations=observations,
+            prompt_tokens=counts["prompt_tokens"],
+            completion_tokens=counts["completion_tokens"],
+            estimated_cost_usd=counts["estimated_cost_usd"],
+            actual_cost_usd=counts["actual_cost_usd"],
         )
 
     def _fetch_summary_counts(self, conn: sqlite3.Connection, session_id: str) -> dict[str, Any]:
@@ -318,15 +359,45 @@ class SessionManager:
             (session_id,),
         )
         if last_active_str is None:
-            row = conn.execute(
-                "SELECT updated_at FROM sessions WHERE id = ?", (session_id,)
-            ).fetchone()
-            last_active_str = row[0] if row else _utcnow_iso()
+            last_active_str = self._fallback_last_active(conn, session_id)
+        prompt_tokens, completion_tokens = self._fetch_token_totals(conn, session_id)
+        total_tokens = prompt_tokens + completion_tokens
         return {
             "task_count": int(task_count),
             "patch_count": int(patch_count),
             "last_active": _parse_iso(last_active_str),
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "estimated_cost_usd": total_tokens * COST_PER_TOKEN,
+            "actual_cost_usd": 0.0,
         }
+
+    def _fallback_last_active(self, conn: sqlite3.Connection, session_id: str) -> str:
+        """Return session updated_at when no test_results exist."""
+        row = conn.execute(
+            "SELECT updated_at FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+        return row[0] if row else _utcnow_iso()
+
+    def _fetch_token_totals(self, conn: sqlite3.Connection, session_id: str) -> tuple[int, int]:
+        """Return summed prompt and completion tokens for *session_id*."""
+        prompt = int(
+            _fetch_scalar(
+                conn,
+                "SELECT COALESCE(SUM(prompt_tokens), 0) FROM test_results WHERE session_id = ?",
+                (session_id,),
+            )
+            or 0
+        )
+        completion = int(
+            _fetch_scalar(
+                conn,
+                "SELECT COALESCE(SUM(completion_tokens), 0) FROM test_results WHERE session_id = ?",
+                (session_id,),
+            )
+            or 0
+        )
+        return prompt, completion
 
     def _fetch_observations(self, conn: sqlite3.Connection, session_id: str) -> list[str]:
         """Fetch all decision descriptions for *session_id*.
@@ -385,8 +456,28 @@ class SessionManager:
         conn = self._connect()
         try:
             conn.executescript(schema_sql)
+            self._migrate_schema(conn)
         finally:
             conn.close()
+
+    def _migrate_schema(self, conn: sqlite3.Connection) -> None:
+        """Apply idempotent schema migrations for existing databases.
+
+        Args:
+            conn: Open SQLite connection.
+        """
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(test_results)").fetchall()
+        }
+        if "prompt_tokens" not in columns:
+            conn.execute(
+                "ALTER TABLE test_results ADD COLUMN prompt_tokens INTEGER NOT NULL DEFAULT 0"
+            )
+        if "completion_tokens" not in columns:
+            conn.execute(
+                "ALTER TABLE test_results ADD COLUMN completion_tokens INTEGER NOT NULL DEFAULT 0"
+            )
+        conn.commit()
 
     def _recover_corrupt_db(self) -> None:
         """Rename the corrupt database and create a fresh one.

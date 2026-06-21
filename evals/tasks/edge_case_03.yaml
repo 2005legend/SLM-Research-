@@ -1,0 +1,7 @@
+id: edge_case_03
+category: edge_case
+description: "Handle zero numerator with zero denominator in divide()"
+repo: simple_api
+expected_files_changed:
+  - simple_api/core.py
+pass_condition: "pytest tests/test_after.py -x"

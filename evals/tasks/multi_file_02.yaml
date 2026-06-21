@@ -1,0 +1,8 @@
+id: multi_file_02
+category: multi_file
+description: "Fix average() and export it from package __init__"
+repo: data_processor
+expected_files_changed:
+  - data_processor/processor.py
+  - data_processor/__init__.py
+pass_condition: "pytest tests/test_after.py -x"

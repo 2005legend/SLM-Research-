@@ -219,9 +219,9 @@ def print_report(report: BenchmarkReport) -> None:
     print("=" * 60)
     target = 0.60
     if report.pass_rate() >= target:
-        print(f"✓ Target pass rate ({target:.0%}) achieved!")
+        print(f"[OK] Target pass rate ({target:.0%}) achieved!")
     else:
-        print(f"✗ Below target pass rate ({target:.0%}). Current: {report.pass_rate():.1%}")
+        print(f"[X] Below target pass rate ({target:.0%}). Current: {report.pass_rate():.1%}")
     print()
 
 
