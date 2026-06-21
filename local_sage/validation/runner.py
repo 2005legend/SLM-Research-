@@ -12,9 +12,11 @@ real repository only when all checks pass.
 
 from __future__ import annotations
 
+import hashlib
 import time
 from pathlib import Path
 
+from local_sage.agent.parser import ModelOutputParser
 from local_sage.validation.contracts import ContractChecker
 from local_sage.validation.exceptions import ValidationTimeoutError  # noqa: F401
 from local_sage.validation.mypy_runner import MypyRunner
@@ -81,6 +83,7 @@ class ValidationRunner:
         self._pytest_timeout = pytest_timeout
         self._mypy_timeout = mypy_timeout
         self._ruff_timeout = ruff_timeout
+        self._cache: dict[str, ValidationResult] = {}
 
         self._patcher = Patcher()
         self._pytest_runner = PytestRunner()
@@ -107,18 +110,30 @@ class ValidationRunner:
         Raises:
             ValidationTimeoutError: If any validator subprocess times out.
         """
+        self._cache.clear()
+        pre = self._pre_validate(patch)
+        if pre is not None:
+            return pre
+
+        key = hashlib.sha256(patch.encode()).hexdigest()[:16]
+        if key in self._cache:
+            return self._cache[key]
+
         temp_dir = self._patcher.apply_to_temp(self._repo_root, patch)
         try:
             result = self._run_all_checks(temp_dir)
-            if result.passed:
-                if self._manual_review:
-                    confirmed = self._prompt_manual_review(result)
-                    if not confirmed:
-                        return result  # user declined — do not apply
-                self._patcher.apply_to_repo(self._repo_root, patch)
-            return result
+            self._cache[key] = result
+            return self._finalize_apply(result, patch)
         finally:
             self._patcher.revert(temp_dir)
+
+    def _finalize_apply(self, result: ValidationResult, patch: str) -> ValidationResult:
+        """Apply patch to repo when checks pass and review confirms."""
+        if result.passed:
+            if self._manual_review and not self._prompt_manual_review(result):
+                return result
+            self._patcher.apply_to_repo(self._repo_root, patch)
+        return result
 
     def validate_only(self, patch: str) -> ValidationResult:
         """Run all checks without applying the patch to the repository.
@@ -137,11 +152,108 @@ class ValidationRunner:
         Raises:
             ValidationTimeoutError: If any validator subprocess times out.
         """
+        pre = self._pre_validate(patch)
+        if pre is not None:
+            return pre
+
+        key = hashlib.sha256(patch.encode()).hexdigest()[:16]
+        if key in self._cache:
+            return self._cache[key]
+
         temp_dir = self._patcher.apply_to_temp(self._repo_root, patch)
         try:
-            return self._run_all_checks(temp_dir)
+            result = self._run_all_checks(temp_dir)
+            self._cache[key] = result
+            return result
         finally:
             self._patcher.revert(temp_dir)
+
+    def validate_search_replace(self, blocks: list) -> ValidationResult:
+        """Validate search-replace blocks without applying them to the repo.
+
+        Applies the blocks to a temporary copy and runs all four validators.
+        The real repository is never modified.
+
+        Args:
+            blocks: List of SearchReplaceBlock objects to validate.
+
+        Returns:
+            A :class:`~local_sage.validation.result.ValidationResult`.
+
+        Raises:
+            ValidationTimeoutError: If any validator subprocess times out.
+        """
+        if not blocks:
+            return self._pre_check_failure("empty patch")
+        key = hashlib.sha256(repr(blocks).encode()).hexdigest()[:16]
+        if key in self._cache:
+            return self._cache[key]
+        try:
+            temp_dir = self._patcher.apply_search_replace_to_temp(
+                self._repo_root, blocks
+            )
+        except Exception as exc:  # noqa: BLE001
+            return self._pre_check_failure(str(exc))
+        try:
+            result = self._run_all_checks(temp_dir)
+            self._cache[key] = result
+            return result
+        finally:
+            self._patcher.revert(temp_dir)
+
+    def _pre_validate(self, patch: str) -> ValidationResult | None:
+        """Run fast pre-checks before applying a patch to a temp directory.
+
+        Args:
+            patch: Unified diff string to validate.
+
+        Returns:
+            A failed ``ValidationResult`` on the first rule violation,
+            or ``None`` when all checks pass.
+        """
+        if not patch.strip():
+            return self._pre_check_failure("empty patch")
+
+        if ModelOutputParser().extract_diff(patch) is None:
+            return self._pre_check_failure("no valid diff found")
+
+        if not self._has_change_lines(patch):
+            return self._pre_check_failure("no change lines")
+
+        import whatthepatch
+
+        for diff in whatthepatch.parse_patch(patch):
+            if getattr(diff, "header", None) is None:
+                continue
+            raw = diff.header.new_path or diff.header.old_path
+            if raw is None:
+                continue
+            resolved = self._patcher._resolve_file_path(raw, self._repo_root)
+            if resolved is None:
+                return self._pre_check_failure(str(raw))
+
+        return None
+
+    def _has_change_lines(self, patch: str) -> bool:
+        """Return True if *patch* contains at least one change line."""
+        for line in patch.splitlines():
+            if (line.startswith("+") or line.startswith("-")) and not line.startswith(
+                ("---", "+++")
+            ):
+                return True
+        return False
+
+    def _pre_check_failure(self, message: str) -> ValidationResult:
+        """Build a failed ValidationResult for a pre-check violation."""
+        return ValidationResult(
+            passed=False,
+            failures=[ValidationFailure(tool="pre_check", message=message)],
+            pytest_counts=None,
+            mypy_errors=None,
+            ruff_violations=None,
+            contract_failures=None,
+            duration_ms=0,
+        )
 
     def _run_all_checks(self, temp_dir: Path) -> ValidationResult:
         """Run all four validators against *temp_dir* and aggregate results.

@@ -44,6 +44,24 @@ class ValidationTimeoutError(ValidationError):
         self.timeout_seconds = timeout_seconds
 
 
+class PatchError(ValidationError):
+    """Raised when ``whatthepatch.parse_patch()`` returns an empty list.
+
+    Attributes:
+        patch_preview: First 200 characters of the invalid patch string.
+    """
+
+    def __init__(self, message: str, patch_preview: str) -> None:
+        """Initialise with a descriptive message and a patch preview.
+
+        Args:
+            message: Human-readable description of the parse failure.
+            patch_preview: First 200 characters of the bad patch string.
+        """
+        super().__init__(message)
+        self.patch_preview = patch_preview
+
+
 class ContractParseError(ValidationError):
     """Raised when a YAML contract file is malformed or cannot be parsed.
 

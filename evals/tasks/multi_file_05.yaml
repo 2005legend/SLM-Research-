@@ -1,0 +1,8 @@
+id: multi_file_05
+category: multi_file
+description: "Fix core divide() and processor average() across two fixture patterns"
+repo: simple_api
+expected_files_changed:
+  - simple_api/core.py
+  - simple_api/__init__.py
+pass_condition: "pytest tests/test_after.py -x"

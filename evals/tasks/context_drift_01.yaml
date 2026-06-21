@@ -1,7 +1,7 @@
 id: context_drift_01
 category: context_drift
-description: "Add type annotations to all functions in the utility module"
-repo: fixture_simple
+description: "Fix divide() using contract and test context from simple_api"
+repo: simple_api
 expected_files_changed:
-  - utils.py
-pass_condition: "mypy passes with no errors on utils.py"
+  - simple_api/core.py
+pass_condition: "pytest tests/test_after.py -x"

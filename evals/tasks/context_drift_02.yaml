@@ -1,0 +1,7 @@
+id: context_drift_02
+category: context_drift
+description: "Fix average() using contract preconditions as guidance"
+repo: data_processor
+expected_files_changed:
+  - data_processor/processor.py
+pass_condition: "pytest tests/test_after.py -x"

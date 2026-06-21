@@ -139,7 +139,35 @@ class ValidationResult:
         sections += self._mypy_section()
         sections += self._ruff_section()
         sections += self._contracts_section()
-        return "\n".join(sections)
+        prompt = "\n".join(sections)
+        note = self._append_diff_format_note()
+        if note is not None:
+            prompt += note
+        return prompt
+
+    def _append_diff_format_note(self) -> str | None:
+        """Return a diff-format hint when the only failure is FORMAT-only ruff.
+
+        Returns:
+            A note string with unified diff format guidance, or ``None``.
+        """
+        ruff_only = (
+            len(self.failures) == 1
+            and self.failures[0].tool == "ruff"
+            and self.ruff_violations is not None
+            and all(v.rule_code == "FORMAT" for v in self.ruff_violations)
+        )
+        if not ruff_only:
+            return None
+        return (
+            "\nNOTE: The model likely produced explanation text instead of a unified diff.\n"
+            "Output ONLY a unified diff in this exact format:\n"
+            "  --- a/file\n"
+            "  +++ b/file\n"
+            "  @@ ... @@ hunks\n"
+            "  -old line\n"
+            "  +new line\n"
+        )
 
     # ------------------------------------------------------------------
     # Private helpers — each ≤ 15 lines so the parent stays under 40

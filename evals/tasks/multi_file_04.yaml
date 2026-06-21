@@ -1,0 +1,8 @@
+id: multi_file_04
+category: multi_file
+description: "Fix average() and add validation helper in processor module"
+repo: data_processor
+expected_files_changed:
+  - data_processor/processor.py
+  - data_processor/__init__.py
+pass_condition: "pytest tests/test_after.py -x"

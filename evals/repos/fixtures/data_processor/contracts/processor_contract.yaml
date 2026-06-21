@@ -1,0 +1,7 @@
+symbol_id: "data_processor/processor.py::average"
+exception_types:
+  - ValueError
+return_shape:
+  type: float
+preconditions:
+  - "values must not be empty"

@@ -88,6 +88,12 @@ def _make_runner(tmp_path: Path, manual_review: bool = False) -> ValidationRunne
     )
 
 
+def _valid_patch(tmp_path: Path) -> str:
+    """Create a target file and return a minimal valid unified diff."""
+    (tmp_path / "foo.py").write_text("old\n", encoding="utf-8")
+    return "--- a/foo.py\n+++ b/foo.py\n@@ -1,1 +1,1 @@\n-old\n+new\n"
+
+
 # ---------------------------------------------------------------------------
 # Unit tests — validate_only()
 # ---------------------------------------------------------------------------
@@ -109,7 +115,7 @@ class TestValidateOnly:
             patch.object(runner._ruff_runner, "run", return_value=[]),
             patch.object(runner._contract_checker, "check", return_value=[]),
         ):
-            result = runner.validate_only("some patch")
+            result = runner.validate_only(_valid_patch(tmp_path))
 
         mock_apply.assert_not_called()
         assert result.passed is True
@@ -127,7 +133,7 @@ class TestValidateOnly:
             patch.object(runner._ruff_runner, "run", return_value=[]),
             patch.object(runner._contract_checker, "check", return_value=[]),
         ):
-            result = runner.validate_only("some patch")
+            result = runner.validate_only(_valid_patch(tmp_path))
 
         mock_apply.assert_not_called()
         assert result.passed is False
@@ -145,7 +151,7 @@ class TestValidateOnly:
             patch.object(runner._ruff_runner, "run", return_value=[]),
             patch.object(runner._contract_checker, "check", return_value=[]),
         ):
-            runner.validate_only("patch")
+            runner.validate_only(_valid_patch(tmp_path))
 
         mock_revert.assert_called_once_with(fake_temp)
 
@@ -166,7 +172,7 @@ class TestValidateOnly:
             ),
             pytest.raises(ValidationTimeoutError),
         ):
-            runner.validate_only("patch")
+            runner.validate_only(_valid_patch(tmp_path))
 
         mock_revert.assert_called_once_with(fake_temp)
 
@@ -192,7 +198,7 @@ class TestValidateAndApply:
             patch.object(runner._ruff_runner, "run", return_value=[]),
             patch.object(runner._contract_checker, "check", return_value=[]),
         ):
-            result = runner.validate_and_apply("patch text")
+            result = runner.validate_and_apply(_valid_patch(tmp_path))
 
         mock_apply.assert_called_once()
         assert result.passed is True
@@ -212,7 +218,7 @@ class TestValidateAndApply:
             patch.object(runner._ruff_runner, "run", return_value=[]),
             patch.object(runner._contract_checker, "check", return_value=[]),
         ):
-            result = runner.validate_and_apply("patch text")
+            result = runner.validate_and_apply(_valid_patch(tmp_path))
 
         mock_apply.assert_not_called()
         assert result.passed is False
@@ -231,7 +237,7 @@ class TestValidateAndApply:
             patch.object(runner._contract_checker, "check", return_value=[]),
             patch.object(runner._patcher, "apply_to_repo"),
         ):
-            runner.validate_and_apply("patch")
+            runner.validate_and_apply(_valid_patch(tmp_path))
 
         mock_revert.assert_called_once_with(fake_temp)
 
@@ -438,6 +444,7 @@ def test_property_19_all_validators_called_before_apply(
             patch.object(runner._mypy_runner, "run", side_effect=record("mypy")),
             patch.object(runner._ruff_runner, "run", side_effect=record("ruff")),
             patch.object(runner._contract_checker, "check", side_effect=record("contracts")),
+            patch.object(ValidationRunner, "_pre_validate", return_value=None),
         ):
             runner.validate_and_apply(patch_text)
 
@@ -479,6 +486,7 @@ def test_property_19_apply_not_called_when_validator_fails(
             patch.object(runner._mypy_runner, "run", return_value=[]),
             patch.object(runner._ruff_runner, "run", return_value=[]),
             patch.object(runner._contract_checker, "check", return_value=[]),
+            patch.object(ValidationRunner, "_pre_validate", return_value=None),
         ):
             result = runner.validate_and_apply(patch_text)
 
@@ -546,7 +554,7 @@ def test_property_21_timeout_error_identifies_tool(
             patch.object(runner._contract_checker, "check", return_value=[]),
         ):
             with pytest.raises(ValidationTimeoutError) as exc_info:
-                runner.validate_only("patch")
+                runner.validate_only(_valid_patch(tmp_path))
 
         assert exc_info.value.tool == tool_name
         assert exc_info.value.timeout_seconds == timeout_seconds
@@ -594,7 +602,7 @@ def test_property_23_manual_review_blocks_apply_without_y(
             patch.object(runner._contract_checker, "check", return_value=[]),
             patch("builtins.input", return_value=user_input),
         ):
-            result = runner.validate_and_apply("patch text")
+            result = runner.validate_and_apply(_valid_patch(tmp_path))
 
         mock_apply.assert_not_called()
         assert result.passed is True
@@ -621,7 +629,7 @@ def test_property_23_manual_review_applies_patch_on_y_confirmation(
         patch.object(runner._contract_checker, "check", return_value=[]),
         patch("builtins.input", return_value="y"),
     ):
-        result = runner.validate_and_apply("patch text")
+        result = runner.validate_and_apply(_valid_patch(tmp_path))
 
     mock_apply.assert_called_once()
     assert result.passed is True

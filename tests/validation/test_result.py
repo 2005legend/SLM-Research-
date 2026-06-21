@@ -328,3 +328,254 @@ class TestValidationResultToRetryPrompt:
         assert "MYPY" not in prompt
         assert "RUFF" not in prompt
         assert "CONTRACTS" not in prompt
+
+    def test_to_retry_prompt_appends_diff_format_note_on_format_only_ruff(self) -> None:
+        """FORMAT-only ruff failure appends unified diff format guidance."""
+        result = ValidationResult(
+            passed=False,
+            failures=[ValidationFailure(tool="ruff", message="1 violation(s)")],
+            pytest_counts=PytestCounts(passed=5, failed=0, errors=0),
+            mypy_errors=[],
+            ruff_violations=[
+                RuffViolation(
+                    file_path=Path("."),
+                    line=0,
+                    column=0,
+                    rule_code="FORMAT",
+                    message="not formatted",
+                )
+            ],
+            contract_failures=[],
+            duration_ms=80,
+        )
+        prompt = result.to_retry_prompt()
+        assert "unified diff" in prompt
+        assert "--- a/file" in prompt
+        assert "+++ b/file" in prompt
+        assert "@@ ... @@ hunks" in prompt
+
+    def test_to_retry_prompt_no_diff_note_on_non_format_ruff(self) -> None:
+        """Non-FORMAT ruff failure does not append the diff format note."""
+        result = ValidationResult(
+            passed=False,
+            failures=[ValidationFailure(tool="ruff", message="1 violation(s)")],
+            pytest_counts=PytestCounts(passed=5, failed=0, errors=0),
+            mypy_errors=[],
+            ruff_violations=[
+                RuffViolation(
+                    file_path=Path("local_sage/bar.py"),
+                    line=5,
+                    column=1,
+                    rule_code="E501",
+                    message="Line too long",
+                )
+            ],
+            contract_failures=[],
+            duration_ms=80,
+        )
+        prompt = result.to_retry_prompt()
+        assert "unified diff" not in prompt
+
+
+    def test_to_retry_prompt_no_diff_note_on_mixed_ruff_violations(self) -> None:
+        """Mixed ruff violations (FORMAT + non-FORMAT) do not append the diff note.
+
+        Even one non-FORMAT rule code means the note must be suppressed.
+        """
+        result = ValidationResult(
+            passed=False,
+            failures=[ValidationFailure(tool="ruff", message="2 violation(s)")],
+            pytest_counts=PytestCounts(passed=5, failed=0, errors=0),
+            mypy_errors=[],
+            ruff_violations=[
+                RuffViolation(
+                    file_path=Path("local_sage/bar.py"),
+                    line=0,
+                    column=0,
+                    rule_code="FORMAT",
+                    message="not formatted",
+                ),
+                RuffViolation(
+                    file_path=Path("local_sage/bar.py"),
+                    line=5,
+                    column=1,
+                    rule_code="E501",
+                    message="Line too long",
+                ),
+            ],
+            contract_failures=[],
+            duration_ms=80,
+        )
+        prompt = result.to_retry_prompt()
+        assert "unified diff" not in prompt
+        assert "--- a/file" not in prompt
+
+    def test_to_retry_prompt_no_diff_note_on_pytest_failure(self) -> None:
+        """A pytest failure does not append the diff format note."""
+        result = ValidationResult(
+            passed=False,
+            failures=[ValidationFailure(tool="pytest", message="1 failed, 0 errors")],
+            pytest_counts=PytestCounts(passed=0, failed=1, errors=0),
+            mypy_errors=[],
+            ruff_violations=[],
+            contract_failures=[],
+            duration_ms=200,
+        )
+        prompt = result.to_retry_prompt()
+        assert "unified diff" not in prompt
+        assert "--- a/file" not in prompt
+
+    def test_to_retry_prompt_no_diff_note_on_multiple_failures(self) -> None:
+        """Multiple failures (including ruff FORMAT) do not append the diff note.
+
+        The note only fires when the ONLY failure is FORMAT-only ruff.
+        """
+        result = ValidationResult(
+            passed=False,
+            failures=[
+                ValidationFailure(tool="ruff", message="1 violation(s)"),
+                ValidationFailure(tool="pytest", message="1 failed, 0 errors"),
+            ],
+            pytest_counts=PytestCounts(passed=0, failed=1, errors=0),
+            mypy_errors=[],
+            ruff_violations=[
+                RuffViolation(
+                    file_path=Path("."),
+                    line=0,
+                    column=0,
+                    rule_code="FORMAT",
+                    message="not formatted",
+                )
+            ],
+            contract_failures=[],
+            duration_ms=150,
+        )
+        prompt = result.to_retry_prompt()
+        assert "unified diff" not in prompt
+        assert "--- a/file" not in prompt
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — ValidationResult.to_retry_prompt() — retry prompt enhancement
+# (Requirements 3.1, 3.2, 3.3)
+# ---------------------------------------------------------------------------
+
+
+class TestRetryPromptDiffFormatNote:
+    """Unit tests for the diff-format note appended by to_retry_prompt().
+
+    Validates: Requirements 3.1, 3.2, 3.3
+    """
+
+    def test_retry_prompt_format_only_ruff_appends_note(self) -> None:
+        """FORMAT-only ruff failure appends note with all four required substrings.
+
+        The note must contain 'unified diff', '--- a/file', '+++ b/file',
+        and '@@ ... @@ hunks' so the model receives unambiguous diff guidance.
+        """
+        result = ValidationResult(
+            passed=False,
+            failures=[ValidationFailure(tool="ruff", message="1 violation(s)")],
+            pytest_counts=None,
+            mypy_errors=None,
+            ruff_violations=[
+                RuffViolation(
+                    file_path=Path("."),
+                    line=0,
+                    column=0,
+                    rule_code="FORMAT",
+                    message="not formatted",
+                )
+            ],
+            contract_failures=None,
+            duration_ms=50,
+        )
+        prompt = result.to_retry_prompt()
+        assert "unified diff" in prompt
+        assert "--- a/file" in prompt
+        assert "+++ b/file" in prompt
+        assert "@@ ... @@ hunks" in prompt
+
+    def test_retry_prompt_mixed_failure_no_note(self) -> None:
+        """Pytest failure does not append the unified diff note (regression guard)."""
+        result = ValidationResult(
+            passed=False,
+            failures=[ValidationFailure(tool="pytest", message="1 failed, 0 errors")],
+            pytest_counts=PytestCounts(passed=0, failed=1, errors=0),
+            mypy_errors=None,
+            ruff_violations=None,
+            contract_failures=None,
+            duration_ms=120,
+        )
+        prompt = result.to_retry_prompt()
+        assert "unified diff" not in prompt
+
+    def test_retry_prompt_multiple_ruff_failures_no_note(self) -> None:
+        """Two ruff ValidationFailures do not trigger the diff-format note.
+
+        The note only fires when there is exactly one failure and it is ruff.
+        """
+        result = ValidationResult(
+            passed=False,
+            failures=[
+                ValidationFailure(tool="ruff", message="violation 1"),
+                ValidationFailure(tool="ruff", message="violation 2"),
+            ],
+            pytest_counts=None,
+            mypy_errors=None,
+            ruff_violations=[
+                RuffViolation(
+                    file_path=Path("a.py"),
+                    line=1,
+                    column=1,
+                    rule_code="FORMAT",
+                    message="not formatted",
+                ),
+                RuffViolation(
+                    file_path=Path("b.py"),
+                    line=2,
+                    column=1,
+                    rule_code="FORMAT",
+                    message="not formatted",
+                ),
+            ],
+            contract_failures=None,
+            duration_ms=60,
+        )
+        prompt = result.to_retry_prompt()
+        assert "unified diff" not in prompt
+
+    def test_retry_prompt_ruff_non_format_no_note(self) -> None:
+        """Ruff failure with a non-FORMAT rule_code does not append the note."""
+        result = ValidationResult(
+            passed=False,
+            failures=[ValidationFailure(tool="ruff", message="1 violation(s)")],
+            pytest_counts=None,
+            mypy_errors=None,
+            ruff_violations=[
+                RuffViolation(
+                    file_path=Path("local_sage/foo.py"),
+                    line=10,
+                    column=1,
+                    rule_code="E501",
+                    message="Line too long",
+                )
+            ],
+            contract_failures=None,
+            duration_ms=40,
+        )
+        prompt = result.to_retry_prompt()
+        assert "unified diff" not in prompt
+
+    def test_retry_prompt_empty_no_failures(self) -> None:
+        """ValidationResult with passed=True and no failures returns empty string."""
+        result = ValidationResult(
+            passed=True,
+            failures=[],
+            pytest_counts=None,
+            mypy_errors=None,
+            ruff_violations=None,
+            contract_failures=None,
+            duration_ms=10,
+        )
+        assert result.to_retry_prompt() == ""

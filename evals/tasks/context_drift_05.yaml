@@ -1,0 +1,7 @@
+id: context_drift_05
+category: context_drift
+description: "Use contract YAML and test suite together to fix divide()"
+repo: simple_api
+expected_files_changed:
+  - simple_api/core.py
+pass_condition: "pytest tests/test_after.py::test_divide_by_zero_raises -x"

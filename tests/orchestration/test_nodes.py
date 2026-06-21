@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from local_sage.model.client import ModelResponse
 from local_sage.orchestration.nodes import (
+    CODE_GENERATOR_SYSTEM_PROMPT,
     code_generator_node,
     context_retriever_node,
     memory_writer_node,
@@ -200,6 +201,35 @@ class TestCodeGeneratorNode:
 
         assert result["patch"] == ""
 
+    def test_passes_code_generator_system_prompt_to_generate(self) -> None:
+        """code_generator_node() passes CODE_GENERATOR_SYSTEM_PROMPT to generate()."""
+        state = AgentState(task="add rate limiter")
+        mock_response = _mock_response("--- a/foo.py\n+++ b/foo.py\n@@ -1 +1 @@\n-x\n+y\n")
+
+        with patch("local_sage.orchestration.nodes.OllamaClient") as MockClient:
+            instance = MockClient.return_value
+            instance.generate = AsyncMock(return_value=mock_response)
+            code_generator_node(state)
+
+        call_kwargs = instance.generate.call_args.kwargs
+        assert call_kwargs["system"] == CODE_GENERATOR_SYSTEM_PROMPT
+
+    def test_empty_patch_and_warning_when_no_diff_extracted(self, caplog) -> None:
+        """code_generator_node() sets patch='' and logs when extract_diff returns None."""
+        import logging
+
+        state = AgentState(task="task")
+        mock_response = _mock_response("Here is my explanation with no diff.")
+
+        with patch("local_sage.orchestration.nodes.OllamaClient") as MockClient:
+            instance = MockClient.return_value
+            instance.generate = AsyncMock(return_value=mock_response)
+            with caplog.at_level(logging.WARNING):
+                result = code_generator_node(state)
+
+        assert result["patch"] == ""
+        assert any("no search-replace blocks found in model output" in r.message for r in caplog.records)
+
 
 # ---------------------------------------------------------------------------
 # validator_node
@@ -217,7 +247,7 @@ class TestValidatorNode:
             patch("local_sage.orchestration.nodes.Path.cwd", return_value=tmp_path),
             patch("local_sage.validation.runner.ValidationRunner") as MockRunner,
         ):
-            MockRunner.return_value.validate_only.return_value = _passing_result()
+            MockRunner.return_value.validate_search_replace.return_value = _passing_result()
             result = validator_node(state)
 
         assert "validation_result" in result
@@ -231,7 +261,7 @@ class TestValidatorNode:
             patch("local_sage.orchestration.nodes.Path.cwd", return_value=tmp_path),
             patch("local_sage.validation.runner.ValidationRunner") as MockRunner,
         ):
-            MockRunner.return_value.validate_only.side_effect = Exception("crash")
+            MockRunner.return_value.validate_search_replace.side_effect = Exception("crash")
             result = validator_node(state)
 
         assert result["validation_result"].passed is False

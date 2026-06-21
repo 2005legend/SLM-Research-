@@ -1,215 +1,70 @@
 # local-sage
 
-A repo-aware, validation-gated coding agent that makes **Qwen2.5 Coder 7B** production-reliable on
-consumer hardware (RTX 3060 / 8 GB VRAM).
+## Problem
 
-## Core Thesis
+Small local language models like Qwen2.5 Coder 7B can generate plausible code, but they fail in predictable ways: malformed diffs, wrong exception types, missing edge-case handling, and context drift across multi-file changes. Running a raw model against a repository produces patches that look correct but break tests, type checks, or declared contracts.
 
-Small local models fail in predictable, structural ways. local-sage catches those failures
-*deterministically* via a validation gate (pytest + mypy + ruff + contract checker) instead of relying on
-a bigger or smarter model.
+local-sage addresses this by wrapping a 7B model in a **validation-gated agent loop** that refuses to apply any patch until it passes pytest, mypy, ruff, and YAML contract checks on a temporary copy of the repository.
 
-## Features
+## How It Works
 
-- **Repo graph** — tree-sitter parses your Python codebase into a NetworkX symbol graph; Personalized
-  PageRank selects the most relevant context for each task (inspired by
-  [Aider's repomap](https://aider.chat/2023/10/22/repomap.html)).
-- **Validation gate** — every generated patch is applied to a temp copy of the repo and must pass pytest,
-  mypy, ruff, and contract checks before touching real files.
-- **Session memory** — SQLite stores task history; Mem0 with local sentence-transformers embeddings
-  provides semantic search over past observations.
-- **Agent wiki** — the agent maintains a markdown knowledge base that accumulates insights across tasks.
-- **Fully local** — zero outbound network calls except to `localhost:11434` (Ollama).
+local-sage is organised into six layers:
 
-## Hardware Requirements
+1. **Model (Layer 1)** — `OllamaClient` calls Qwen2.5 Coder 7B via `localhost:11434`. All inference stays on-device.
+2. **Orchestration (Layer 2)** — LangGraph nodes (`planner → context_retriever → code_generator → validator → memory_writer`) coordinate the agent loop with retry on validation failure.
+3. **Repo Graph (Layer 3)** — tree-sitter parses Python into a NetworkX symbol graph; Personalized PageRank selects the most relevant context for each task.
+4. **Session Memory (Layer 4)** — SQLite stores task history, token counts, and observations; Mem0 provides semantic search over past decisions.
+5. **Wiki (Layer 5)** — the agent maintains a markdown knowledge base that accumulates insights across tasks.
+6. **Validation (Layer 6)** — every patch is pre-checked, applied to a temp copy via `whatthepatch`, and must pass pytest + mypy + ruff + `ContractChecker` before touching real files.
 
-| Component | Minimum |
-|---|---|
-| GPU | RTX 3060 or equivalent, 8 GB VRAM |
-| RAM | 16 GB system RAM |
-| Storage | ~10 GB (model + index) |
-
-## Installation
-
-```bash
-pip install local-sage
-```
-
-Or install from source:
-
-```bash
-git clone https://github.com/your-org/local-sage
-cd local-sage
-pip install -e ".[dev]"
-```
-
-## Prerequisites
-
-1. **Ollama** — install from [ollama.ai](https://ollama.ai) and pull the model:
-
-   ```bash
-   ollama pull qwen2.5-coder:7b-instruct-q4_K_M
-   ```
-
-2. **Python 3.11+**
+The `ModelOutputParser` (in `local_sage/agent/`) extracts clean unified diffs from raw model output regardless of surrounding prose or code fences.
 
 ## Quick Start
 
 ```bash
-# Boot the agent, index the repo, load the latest session
+# Install dependencies
+pip install -e ".[dev]"
+
+# Start Ollama and pull the model
+ollama pull qwen2.5-coder:7b
+
+# Initialise and start the agent
 sage start
 
 # Run a coding task
-sage task "add input validation to the /users POST endpoint"
+sage task "fix the divide-by-zero bug in simple_api/core.py"
 
-# Validate a patch without applying it
-sage validate --patch my_changes.patch
+# Run the full benchmark suite
+python evals/runner.py
 
-# Check agent and system status
-sage status
+# Run the baseline (raw Ollama, no scaffolding)
+python evals/baseline.py
 ```
 
-## All Commands
+## Benchmark Results
 
-| Command | Description |
-|---|---|
-| `sage start` | Boot the agent, index the repo, load the latest session |
-| `sage task "<description>"` | Run a coding task through the full agent loop |
-| `sage validate --patch <path>` | Validate a patch file without applying it |
-| `sage benchmark --suite <path>` | Run the eval benchmark suite |
-| `sage memory show` | Display current session memory in a Rich table |
-| `sage wiki list` | List all wiki entries with timestamps |
-| `sage wiki show <entry>` | Display the full content of a wiki entry |
-| `sage status` | Show Ollama model status, repo index stats, and session info |
+| Category | Tasks | Pass Rate (local-sage) | Pass Rate (Baseline) |
+|---|---|---|---|
+| contract_violation | 5 | TBD | TBD |
+| edge_case | 5 | TBD | TBD |
+| multi_file | 5 | TBD | TBD |
+| context_drift | 5 | TBD | TBD |
+| **Overall** | **20** | **TBD** | **TBD** |
 
-## Configuration
+## Research Contributions
 
-local-sage can be configured via environment variables or a `sage.toml` file at the repo root.
+The novel contribution of local-sage is the **validation gate**: a deterministic, multi-tool check that runs before any patch is applied to the real repository.
 
-### `sage.toml` example
+- **ContractChecker** — loads YAML contracts from `contracts/` and statically verifies that each symbol's `exception_types` and `return_shape` match the source code via AST walking and `typing.get_type_hints()`.
+- **pytest** — functional correctness against the existing test suite.
+- **mypy** — static type safety.
+- **ruff** — lint and format compliance.
 
-```toml
-ollama_base_url = "http://localhost:11434"
-ollama_model = "qwen2.5-coder:7b-instruct-q4_K_M"
-ollama_timeout = 120
-max_retries = 3
-pytest_timeout = 60
-mypy_timeout = 60
-ruff_timeout = 30
-top_k_context = 10
-wiki_dir = "wiki"
-sage_dir = ".sage"
-manual_review = false
-embedding_model = "multi-qa-MiniLM-L6-cos-v1"
-```
+Together, these four validators catch the structural failure modes of small local models without requiring a larger or smarter model. The agent retries with diagnostic feedback until all checks pass or the retry budget is exhausted.
 
-### Environment variables
+## Acknowledgements
 
-Each field maps to a `SAGE_` prefixed environment variable, e.g.:
-
-```bash
-export SAGE_OLLAMA_BASE_URL="http://localhost:11434"
-export SAGE_MAX_RETRIES=5
-export SAGE_MANUAL_REVIEW=true
-```
-
-## Architecture
-
-```
-local_sage/
-├── model/          # Layer 1 — Ollama async HTTP client
-├── orchestration/  # Layer 2 — LangGraph agent loop
-├── repo_graph/     # Layer 3 — tree-sitter parser + NetworkX symbol graph
-├── memory/         # Layer 4 — SQLite session memory + Mem0 semantic search
-├── wiki/           # Layer 5 — markdown knowledge base
-└── validation/     # Layer 6 — validation gate (pytest + mypy + ruff + contracts)
-```
-
-Data flows top-down during task execution and bottom-up during context retrieval. No layer imports from a
-layer above it.
-
-## Development
-
-```bash
-# Install dev dependencies
-pip install -e ".[dev]"
-
-# Run tests
-pytest
-
-# Type check
-mypy local_sage/
-
-# Lint and format
-ruff check .
-ruff format .
-
-# Run tests with coverage
-pytest --cov=local_sage --cov-report=term-missing
-```
-
-## Runtime Files
-
-local-sage creates the following files in your repository:
-
-```
-<repo_root>/
-├── .sage/
-│   ├── index.json    ← SymbolGraph cache
-│   ├── memory.db     ← SQLite session database
-│   └── vectors/      ← Qdrant on-disk vector store
-├── wiki/             ← Agent-maintained markdown knowledge base
-└── contracts/        ← YAML contract files (optional)
-```
-
-Add `.sage/` to your `.gitignore` if you don't want to commit the index and memory database.
-
-## Mem0 Configuration
-
-local-sage uses [Mem0](https://github.com/mem0ai/mem0) for semantic memory search over past observations. It is configured to run **entirely locally** — no cloud API keys are required or used.
-
-### Critical constraint: always use HuggingFace embedder
-
-Mem0 **must** use `embedder.provider = "huggingface"` with `sentence-transformers`. It must **never** fall back to OpenAI, Cohere, or any other cloud embedding provider.
-
-The configuration in `local_sage/memory/semantic.py`:
-
-```python
-MEM0_CONFIG = {
-    "embedder": {
-        "provider": "huggingface",          # ← NEVER change this to "openai"
-        "config": {
-            "model": "multi-qa-MiniLM-L6-cos-v1",
-            "embedding_dims": 384,
-        },
-    },
-    "llm": {
-        "provider": "ollama",
-        "config": {
-            "model": "qwen2.5-coder:7b-instruct-q4_K_M",
-            "ollama_base_url": "http://localhost:11434",
-        },
-    },
-    "vector_store": {
-        "provider": "qdrant",
-        "config": {"collection_name": "local_sage", "path": ".sage/vectors"},
-    },
-}
-```
-
-The `multi-qa-MiniLM-L6-cos-v1` model produces 384-dimensional embeddings and fits in ~90 MB RAM. The vector store uses Qdrant in local on-disk mode — no Qdrant server is required.
-
-Any change to this configuration that introduces a non-local provider is a **breaking change** and will be rejected in code review.
-
-## Inspiration and References
-
-- [Aider repomap](https://aider.chat/2023/10/22/repomap.html) — Personalized PageRank for context selection
-- [SWE-bench](https://arxiv.org/abs/2310.06770) — Evaluation methodology
-- [OpenHands](https://github.com/All-Hands-AI/OpenHands) — Validation and sandboxing approach
-- [Agentless](https://github.com/OpenAutoCoder/Agentless) — Minimal agent baseline
-- [Karpathy on agent knowledge bases](https://x.com/karpathy)
-- [Hermes function-calling pattern](https://github.com/NousResearch/hermes-function-calling)
-
-## License
-
-MIT
+- [Aider](https://aider.chat) for the repomap / Personalized PageRank context selection approach.
+- [Ollama](https://ollama.ai) for local model serving.
+- [LangGraph](https://langchain-ai.github.io/langgraph/) for agent orchestration.
+- [whatthepatch](https://github.com/cscorley/whatthepatch) for pure-Python unified diff application.

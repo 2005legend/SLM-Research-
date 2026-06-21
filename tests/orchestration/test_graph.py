@@ -61,9 +61,9 @@ class TestRouteAfterValidation:
     """Unit tests for route_after_validation()."""
 
     def test_routes_to_memory_writer_on_pass(self) -> None:
-        """route_after_validation() returns 'memory_writer' when validation passes."""
+        """route_after_validation() returns 'apply_patch' when validation passes."""
         state = AgentState(validation_result=_passing_result(), retry_count=0, max_retries=3)
-        assert route_after_validation(state) == "memory_writer"
+        assert route_after_validation(state) == "apply_patch"
 
     def test_routes_to_code_generator_on_failure_with_retries_remaining(self) -> None:
         """route_after_validation() returns 'code_generator' when retries remain."""

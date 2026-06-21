@@ -1,0 +1,7 @@
+id: context_drift_03
+category: context_drift
+description: "Infer correct fix from failing test_before.py in simple_api"
+repo: simple_api
+expected_files_changed:
+  - simple_api/core.py
+pass_condition: "pytest tests/test_before.py tests/test_after.py -x"

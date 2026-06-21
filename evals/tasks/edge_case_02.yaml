@@ -1,0 +1,7 @@
+id: edge_case_02
+category: edge_case
+description: "Handle empty list input in average()"
+repo: data_processor
+expected_files_changed:
+  - data_processor/processor.py
+pass_condition: "pytest tests/test_after.py::test_average_empty_raises -x"

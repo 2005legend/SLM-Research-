@@ -26,20 +26,21 @@ from local_sage.validation.result import PytestCounts
 # ---------------------------------------------------------------------------
 
 
-def _make_completed_process(stdout: str, returncode: int = 0) -> MagicMock:
-    """Return a mock CompletedProcess with the given stdout.
-
-    Args:
-        stdout: The stdout string to return.
-        returncode: The process return code.
-
-    Returns:
-        A MagicMock configured to look like subprocess.CompletedProcess.
-    """
-    mock = MagicMock()
-    mock.stdout = stdout
-    mock.returncode = returncode
-    return mock
+def _make_subprocess_run_side_effect(stdout: str, returncode: int = 0):
+    def side_effect(*args, **kwargs):
+        cmd = args[0] if args else kwargs.get("args", [])
+        report_file = None
+        for arg in cmd:
+            if isinstance(arg, str) and arg.startswith("--json-report-file="):
+                report_file = arg.split("=", 1)[1]
+                break
+        if report_file and report_file != "-":
+            Path(report_file).write_text(stdout, encoding="utf-8")
+        mock = MagicMock()
+        mock.stdout = ""
+        mock.returncode = returncode
+        return mock
+    return side_effect
 
 
 def _make_json_report(passed: int, failed: int, error: int) -> str:
@@ -121,9 +122,9 @@ class TestPytestRunnerRun:
     def test_run_returns_pytest_counts_on_success(self, tmp_path: Path) -> None:
         """run() returns PytestCounts parsed from subprocess stdout."""
         stdout = _make_json_report(passed=7, failed=0, error=0)
-        mock_result = _make_completed_process(stdout=stdout, returncode=0)
+        mock_side_effect = _make_subprocess_run_side_effect(stdout=stdout, returncode=0)
 
-        with patch("local_sage.validation.pytest_runner.subprocess.run", return_value=mock_result):
+        with patch("local_sage.validation.pytest_runner.subprocess.run", side_effect=mock_side_effect):
             runner = PytestRunner()
             counts = runner.run(tmp_path)
 
@@ -134,9 +135,9 @@ class TestPytestRunnerRun:
     def test_run_returns_counts_even_on_nonzero_exit(self, tmp_path: Path) -> None:
         """run() returns PytestCounts even when pytest exits with non-zero code."""
         stdout = _make_json_report(passed=3, failed=2, error=0)
-        mock_result = _make_completed_process(stdout=stdout, returncode=1)
+        mock_side_effect = _make_subprocess_run_side_effect(stdout=stdout, returncode=1)
 
-        with patch("local_sage.validation.pytest_runner.subprocess.run", return_value=mock_result):
+        with patch("local_sage.validation.pytest_runner.subprocess.run", side_effect=mock_side_effect):
             runner = PytestRunner()
             counts = runner.run(tmp_path)
 
@@ -158,11 +159,11 @@ class TestPytestRunnerRun:
     def test_run_passes_cwd_to_subprocess(self, tmp_path: Path) -> None:
         """run() passes repo_dir as cwd to subprocess.run."""
         stdout = _make_json_report(passed=1, failed=0, error=0)
-        mock_result = _make_completed_process(stdout=stdout)
+        mock_side_effect = _make_subprocess_run_side_effect(stdout=stdout)
 
         with patch(
             "local_sage.validation.pytest_runner.subprocess.run",
-            return_value=mock_result,
+            side_effect=mock_side_effect,
         ) as mock_run:
             runner = PytestRunner()
             runner.run(tmp_path)
@@ -173,11 +174,11 @@ class TestPytestRunnerRun:
     def test_run_passes_timeout_to_subprocess(self, tmp_path: Path) -> None:
         """run() passes the timeout parameter to subprocess.run."""
         stdout = _make_json_report(passed=1, failed=0, error=0)
-        mock_result = _make_completed_process(stdout=stdout)
+        mock_side_effect = _make_subprocess_run_side_effect(stdout=stdout)
 
         with patch(
             "local_sage.validation.pytest_runner.subprocess.run",
-            return_value=mock_result,
+            side_effect=mock_side_effect,
         ) as mock_run:
             runner = PytestRunner()
             runner.run(tmp_path, timeout=30)
@@ -210,11 +211,11 @@ def test_property_20_pytest_parsing_round_trip(passed: int, failed: int, error: 
     report = {"summary": {"passed": passed, "failed": failed, "error": error}}
     stdout = json.dumps(report)
 
-    mock_result = _make_completed_process(stdout=stdout, returncode=0 if failed == 0 else 1)
+    mock_side_effect = _make_subprocess_run_side_effect(stdout=stdout, returncode=0 if failed == 0 else 1)
 
     with patch(
         "local_sage.validation.pytest_runner.subprocess.run",
-        return_value=mock_result,
+        side_effect=mock_side_effect,
     ):
         runner = PytestRunner()
         counts = runner.run(Path("/fake/repo"))

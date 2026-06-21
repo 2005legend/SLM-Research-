@@ -1,0 +1,7 @@
+symbol_id: "simple_api/core.py::divide"
+exception_types:
+  - ZeroDivisionError
+return_shape:
+  type: float
+preconditions:
+  - "b must not be zero"
