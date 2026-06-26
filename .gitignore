@@ -1,6 +1,6 @@
 # local-sage runtime files
 .sage/
-wiki/
+/wiki/
 
 # Environment — contains model config, never commit secrets
 .env
