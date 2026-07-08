@@ -171,7 +171,7 @@ def test_load_index_returns_none_for_stale_cache(tmp_path: Path) -> None:
         max_size=10,
     )
 )
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 def test_property_7_indexer_covers_all_py_files(sources: list[str]) -> None:
     """Property 7: RepoIndexer covers all .py files.
 

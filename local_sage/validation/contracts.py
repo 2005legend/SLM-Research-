@@ -94,16 +94,16 @@ class ContractChecker:
             print(f.symbol_id, f.constraint, f.actual)
     """
 
-    def load_contracts(self, repo_dir: Path) -> list[Contract]:
-        """Load all ``*.yaml`` contract files from ``<repo_dir>/contracts/``.
+    def load_contracts(self, contracts_dir: Path) -> list[Contract]:
+        """Load all ``*.yaml`` contract files from ``contracts_dir``.
 
         Parses each file with ``yaml.safe_load()``.  Resolves ``source_file``
         and ``function_name`` from ``symbol_id``.  Logs preconditions at INFO
-        level.  Skips the ``contracts/`` directory gracefully if it does not
+        level.  Skips the directory gracefully if it does not
         exist.
 
         Args:
-            repo_dir: Path to the repository root.
+            contracts_dir: Path to the repository's contracts directory.
 
         Returns:
             A list of :class:`Contract` objects, one per YAML file.
@@ -112,9 +112,8 @@ class ContractChecker:
             ContractParseError: If any YAML file is malformed or missing
                 required fields (``symbol_id`` or ``exception_types``).
         """
-        contracts_dir = repo_dir / "contracts"
         if not contracts_dir.is_dir():
-            logger.info("No contracts/ directory found at %s — skipping", repo_dir)
+            logger.info("No contracts/ directory found at %s — skipping", contracts_dir)
             return []
 
         contracts: list[Contract] = []
@@ -124,26 +123,28 @@ class ContractChecker:
             contracts.append(contract)
         return contracts
 
-    def check(self, repo_dir: Path) -> list[ContractFailure]:
-        """Run all contract checks against the source code in *repo_dir*.
+    def check(self, contracts_dir: Path, source_dir: Path) -> list[ContractFailure]:
+        """Run all contract checks against the source code in *source_dir*.
 
-        Loads contracts via :meth:`load_contracts`, then for each contract
+        Loads contracts from *contracts_dir*, then for each contract
         checks ``exception_types`` via AST walking and ``return_shape`` via
-        ``typing.get_type_hints()``.
+        ``typing.get_type_hints()`` against the code in *source_dir*.
 
         Args:
-            repo_dir: Path to the repository root (typically a temp copy).
+            contracts_dir: Path to the original repository's contracts directory.
+            source_dir: Path to the source code to validate (typically a temp copy).
 
         Returns:
             A list of :class:`~local_sage.validation.result.ContractFailure`
             objects for every constraint violation found.  An empty list means
             all contracts pass.
         """
-        contracts = self.load_contracts(repo_dir)
+        contracts = self.load_contracts(contracts_dir)
         failures: list[ContractFailure] = []
         for contract in contracts:
-            failures.extend(self._check_exception_types(contract, repo_dir))
-            failures.extend(self._check_return_shape(contract, repo_dir))
+            failures.extend(self._check_exception_types(contract, source_dir))
+            failures.extend(self._check_return_shape(contract, source_dir))
+            failures.extend(self._check_preconditions_ast(contract, source_dir))
         return failures
 
     # ------------------------------------------------------------------
@@ -241,6 +242,29 @@ class ContractChecker:
                 contract.symbol_id,
                 precondition,
             )
+
+    def _check_preconditions_ast(self, contract: Contract, repo_dir: Path) -> list[ContractFailure]:
+        """Check that the function starts with an assert statement for the preconditions."""
+        if not contract.preconditions:
+            return []
+            
+        full_path = repo_dir / contract.source_file
+        if not full_path.exists():
+            return []
+            
+        try:
+            tree = ast.parse(full_path.read_text(encoding="utf-8"))
+            visitor = _FunctionASTVisitor(contract.function_name)
+            visitor.visit(tree)
+            
+            if visitor.function_node:
+                first_stmts = visitor.function_node.body[:len(contract.preconditions)]
+                for stmt in first_stmts:
+                    if not isinstance(stmt, ast.Assert):
+                        return [ContractFailure(symbol_id=contract.symbol_id, constraint="preconditions", actual="Function does not start with assert statements for preconditions")]
+        except SyntaxError:
+            pass
+        return []
 
     def _check_exception_types(self, contract: Contract, repo_dir: Path) -> list[ContractFailure]:
         """Check that all Raise nodes use allowed exception types.
@@ -345,6 +369,10 @@ class ContractChecker:
             ):
                 return node
         return None
+
+
+
+
 
     def _extract_raise_name(self, node: ast.Raise) -> str | None:
         """Extract the exception class name from a ``Raise`` AST node.

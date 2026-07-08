@@ -120,6 +120,7 @@ class ValidationResult:
     ruff_violations: list[RuffViolation] | None
     contract_failures: list[ContractFailure] | None
     duration_ms: int
+    confidence_score: float = 1.0
 
     def to_retry_prompt(self) -> str:
         """Format failures as a prompt suffix for the code generator.

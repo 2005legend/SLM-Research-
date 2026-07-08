@@ -89,14 +89,14 @@ class TestLoadContracts:
     def test_returns_empty_list_when_no_contracts_dir(self, tmp_path: Path) -> None:
         """load_contracts() returns [] when contracts/ directory does not exist."""
         checker = ContractChecker()
-        contracts = checker.load_contracts(tmp_path)
+        contracts = checker.load_contracts(tmp_path / "contracts")
         assert contracts == []
 
     def test_returns_empty_list_for_empty_contracts_dir(self, tmp_path: Path) -> None:
         """load_contracts() returns [] when contracts/ directory is empty."""
         (tmp_path / "contracts").mkdir()
         checker = ContractChecker()
-        contracts = checker.load_contracts(tmp_path)
+        contracts = checker.load_contracts(tmp_path / "contracts")
         assert contracts == []
 
     def test_loads_single_contract(self, tmp_path: Path) -> None:
@@ -108,7 +108,7 @@ class TestLoadContracts:
             ["ValueError"],
         )
         checker = ContractChecker()
-        contracts = checker.load_contracts(tmp_path)
+        contracts = checker.load_contracts(tmp_path / "contracts")
         assert len(contracts) == 1
         assert contracts[0].symbol_id == "pkg/module.py::my_func"
         assert contracts[0].exception_types == ["ValueError"]
@@ -119,7 +119,7 @@ class TestLoadContracts:
         _write_contract(contracts_dir, "c1", "a.py::func_a", ["ErrorA"])
         _write_contract(contracts_dir, "c2", "b.py::func_b", ["ErrorB"])
         checker = ContractChecker()
-        contracts = checker.load_contracts(tmp_path)
+        contracts = checker.load_contracts(tmp_path / "contracts")
         assert len(contracts) == 2
 
     def test_raises_contract_parse_error_on_malformed_yaml(self, tmp_path: Path) -> None:
@@ -130,7 +130,7 @@ class TestLoadContracts:
         bad_yaml.write_text("key: [unclosed bracket", encoding="utf-8")
         checker = ContractChecker()
         with pytest.raises(ContractParseError):
-            checker.load_contracts(tmp_path)
+            checker.load_contracts(tmp_path / "contracts")
 
     def test_raises_contract_parse_error_on_missing_symbol_id(self, tmp_path: Path) -> None:
         """load_contracts() raises ContractParseError when symbol_id is missing."""
@@ -140,7 +140,7 @@ class TestLoadContracts:
         yaml_path.write_text("exception_types:\n  - ValueError\n", encoding="utf-8")
         checker = ContractChecker()
         with pytest.raises(ContractParseError) as exc_info:
-            checker.load_contracts(tmp_path)
+            checker.load_contracts(tmp_path / "contracts")
         assert "symbol_id" in exc_info.value.parse_error
 
     def test_raises_contract_parse_error_on_missing_exception_types(self, tmp_path: Path) -> None:
@@ -151,7 +151,7 @@ class TestLoadContracts:
         yaml_path.write_text("symbol_id: pkg/module.py::func\n", encoding="utf-8")
         checker = ContractChecker()
         with pytest.raises(ContractParseError) as exc_info:
-            checker.load_contracts(tmp_path)
+            checker.load_contracts(tmp_path / "contracts")
         assert "exception_types" in exc_info.value.parse_error
 
     def test_contract_parse_error_has_file_path_attribute(self, tmp_path: Path) -> None:
@@ -162,7 +162,7 @@ class TestLoadContracts:
         bad_yaml.write_text("not: valid: yaml: [", encoding="utf-8")
         checker = ContractChecker()
         with pytest.raises(ContractParseError) as exc_info:
-            checker.load_contracts(tmp_path)
+            checker.load_contracts(tmp_path / "contracts")
         assert exc_info.value.file_path == bad_yaml
 
 
@@ -187,7 +187,7 @@ class TestCheckExceptionTypes:
             ["AllowedError"],
         )
         checker = ContractChecker()
-        failures = checker.check(tmp_path)
+        failures = checker.check(tmp_path / "contracts", tmp_path)
         assert failures == []
 
     def test_failure_when_function_raises_disallowed_exception(self, tmp_path: Path) -> None:
@@ -205,7 +205,7 @@ class TestCheckExceptionTypes:
             ["AllowedError"],
         )
         checker = ContractChecker()
-        failures = checker.check(tmp_path)
+        failures = checker.check(tmp_path / "contracts", tmp_path)
         assert len(failures) == 1
         assert failures[0].constraint == "exception_types"
         assert "ValueError" in failures[0].actual
@@ -221,7 +221,7 @@ class TestCheckExceptionTypes:
             ["AllowedError"],
         )
         checker = ContractChecker()
-        failures = checker.check(tmp_path)
+        failures = checker.check(tmp_path / "contracts", tmp_path)
         assert failures == []
 
     def test_raise_x_from_y_only_checks_x(self, tmp_path: Path) -> None:
@@ -240,7 +240,7 @@ class TestCheckExceptionTypes:
             ["AllowedError"],
         )
         checker = ContractChecker()
-        failures = checker.check(tmp_path)
+        failures = checker.check(tmp_path / "contracts", tmp_path)
         assert failures == []
 
     def test_method_inside_class_is_found(self, tmp_path: Path) -> None:
@@ -259,7 +259,7 @@ class TestCheckExceptionTypes:
             ["AllowedError"],
         )
         checker = ContractChecker()
-        failures = checker.check(tmp_path)
+        failures = checker.check(tmp_path / "contracts", tmp_path)
         assert len(failures) == 1
         assert "ValueError" in failures[0].actual
 
@@ -274,7 +274,7 @@ class TestCheckExceptionTypes:
             ["AllowedError"],
         )
         checker = ContractChecker()
-        failures = checker.check(tmp_path)
+        failures = checker.check(tmp_path / "contracts", tmp_path)
         assert failures == []
 
     def test_missing_source_file_returns_contract_failure(self, tmp_path: Path) -> None:
@@ -286,7 +286,7 @@ class TestCheckExceptionTypes:
             ["AllowedError"],
         )
         checker = ContractChecker()
-        failures = checker.check(tmp_path)
+        failures = checker.check(tmp_path / "contracts", tmp_path)
         assert len(failures) == 1
         assert failures[0].constraint == "source_file_not_found"
 
@@ -301,13 +301,13 @@ class TestCheckExceptionTypes:
             ["AllowedError"],
         )
         checker = ContractChecker()
-        failures = checker.check(tmp_path)
+        failures = checker.check(tmp_path / "contracts", tmp_path)
         assert failures[0].symbol_id == "pkg/module.py::my_func"
 
     def test_returns_empty_list_when_no_contracts_dir(self, tmp_path: Path) -> None:
         """check() returns [] when there is no contracts/ directory."""
         checker = ContractChecker()
-        failures = checker.check(tmp_path)
+        failures = checker.check(tmp_path / "contracts", tmp_path)
         assert failures == []
 
 
@@ -364,7 +364,7 @@ def test_property_22_contract_checker_detects_exception_violations(
         )
 
         checker = ContractChecker()
-        failures = checker.check(repo_dir)
+        failures = checker.check(repo_dir / "contracts", repo_dir)
 
         assert len(failures) >= 1
         assert any(f.constraint == "exception_types" for f in failures)
@@ -510,7 +510,7 @@ class TestMissingSourceFile:
         )
 
         checker = ContractChecker()
-        failures = checker.check(tmp_path)
+        failures = checker.check(tmp_path / "contracts", tmp_path)
 
         # Must not be empty — the missing file must surface as a failure.
         assert len(failures) >= 1

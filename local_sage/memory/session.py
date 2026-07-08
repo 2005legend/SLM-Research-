@@ -24,6 +24,7 @@ from local_sage.memory.exceptions import (
 
 if TYPE_CHECKING:
     from local_sage.validation.result import ValidationResult  # noqa: F401
+    from local_sage.agent.harness import AtomicTask, TaskSummary
 
 logger = logging.getLogger(__name__)
 
@@ -299,6 +300,105 @@ class SessionManager:
             conn.commit()
         finally:
             conn.close()
+
+    def cache_symbol_context(
+        self,
+        session_id: str,
+        symbol_id: str,
+        file_path: str,
+        content: str,
+        line_start: int,
+        line_end: int,
+    ) -> None:
+        """Cache windowed context for a symbol in the database."""
+        self._assert_session_exists(session_id)
+        now = _utcnow_iso()
+        conn = self._connect()
+        try:
+            conn.execute(
+                "INSERT INTO symbol_snapshots (session_id, symbol_id, file_path, content, line_start, line_end, captured_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (session_id, symbol_id, file_path, content, line_start, line_end, now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_symbol_context(self, session_id: str, symbol_id: str) -> str | None:
+        """Retrieve the cached context for a symbol if it exists."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT content FROM symbol_snapshots WHERE session_id = ? AND symbol_id = ? ORDER BY captured_at DESC LIMIT 1",
+                (session_id, symbol_id),
+            ).fetchone()
+        finally:
+            conn.close()
+        return row[0] if row else None
+    def save_harness_plan(self, session_id: str, tasks: list["AtomicTask"]) -> None:
+        """Save a planned sequence of atomic tasks."""
+        self._assert_session_exists(session_id)
+        import json
+        now = _utcnow_iso()
+        conn = self._connect()
+        try:
+            for task in tasks:
+                conn.execute(
+                    "INSERT OR REPLACE INTO atomic_tasks (id, session_id, description, target_file, target_symbol, depends_on, status, retry_count, applied_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (task.id, session_id, task.description, task.target_file, task.target_symbol, json.dumps(task.depends_on), task.status, task.retry_count, now)
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def update_task_status(self, session_id: str, task_id: str, status: str) -> None:
+        """Update the status of an atomic task."""
+        conn = self._connect()
+        try:
+            conn.execute(
+                "UPDATE atomic_tasks SET status = ?, applied_at = ? WHERE session_id = ? AND id = ?",
+                (status, _utcnow_iso(), session_id, task_id)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def save_task_summary(self, session_id: str, summary: "TaskSummary") -> None:
+        """Save the execution summary of an atomic task."""
+        import json
+        conn = self._connect()
+        try:
+            conn.execute(
+                "INSERT INTO task_summaries (session_id, task_id, files_changed, symbols_added, symbols_modified, decisions, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (session_id, summary.task_id, json.dumps(summary.files_changed), json.dumps(summary.symbols_added), json.dumps(summary.symbols_modified), json.dumps(summary.decisions), _utcnow_iso())
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_task_summaries(self, session_id: str) -> list["TaskSummary"]:
+        """Retrieve all completed task summaries for the session."""
+        import json
+        from local_sage.agent.harness import TaskSummary
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT task_id, files_changed, symbols_added, symbols_modified, decisions FROM task_summaries WHERE session_id = ? ORDER BY created_at ASC",
+                (session_id,)
+            ).fetchall()
+        finally:
+            conn.close()
+        return [
+            TaskSummary(
+                task_id=row[0],
+                files_changed=json.loads(row[1]),
+                symbols_added=json.loads(row[2]),
+                symbols_modified=json.loads(row[3]),
+                decisions=json.loads(row[4])
+            ) for row in rows
+        ]
 
     def get_session_summary(self, session_id: str) -> SessionSummary:
         """Return an aggregated summary of activity for *session_id*.

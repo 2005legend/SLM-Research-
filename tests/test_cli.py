@@ -231,7 +231,7 @@ class TestStatusCommand:
         ):
             result = runner.invoke(app, ["status"])
 
-        assert "qwen2.5-coder" in result.output
+        assert "llama-3.1-8b-instant" in result.output
 
 
 # ---------------------------------------------------------------------------

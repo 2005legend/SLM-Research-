@@ -53,3 +53,37 @@ CREATE TABLE IF NOT EXISTS wiki_entries (
     file_path TEXT NOT NULL,
     written_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS symbol_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    symbol_id TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    content TEXT NOT NULL,
+    line_start INTEGER NOT NULL,
+    line_end INTEGER NOT NULL,
+    captured_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS atomic_tasks (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    description TEXT NOT NULL,
+    target_file TEXT NOT NULL,
+    target_symbol TEXT,
+    depends_on TEXT NOT NULL,
+    status TEXT NOT NULL,
+    retry_count INTEGER NOT NULL,
+    applied_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS task_summaries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    task_id TEXT NOT NULL REFERENCES atomic_tasks(id),
+    files_changed TEXT NOT NULL,
+    symbols_added TEXT NOT NULL,
+    symbols_modified TEXT NOT NULL,
+    decisions TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);

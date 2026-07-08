@@ -50,6 +50,8 @@ class SageConfig:
         embedding_model: HuggingFace sentence-transformers model for semantic memory.
     """
 
+    model_provider: str = "ollama"  # "ollama" | "groq"
+    groq_model: str = "llama-3.1-8b-instant"
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "qwen2.5-coder:7b"
     ollama_timeout: int = 120

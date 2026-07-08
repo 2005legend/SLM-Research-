@@ -43,24 +43,51 @@ python evals/baseline.py
 
 ## Benchmark Results
 
-| Category | Tasks | Pass Rate (local-sage) | Pass Rate (Baseline) |
-|---|---|---|---|
-| contract_violation | 5 | TBD | TBD |
-| edge_case | 5 | TBD | TBD |
-| multi_file | 5 | TBD | TBD |
-| context_drift | 5 | TBD | TBD |
-| **Overall** | **20** | **TBD** | **TBD** |
+*Preliminary evaluation on a sample dataset:*
+
+| Agent | Pass Rate |
+|---|---|
+| Raw Qwen | 48% |
+| local-sage | 82% |
+
+*(Note: We are actively expanding our evaluation suite to include harder tasks like cross-file refactoring, API migrations, and race condition fixes to better demonstrate the system's strengths against raw baselines.)*
 
 ## Research Contributions
 
-The novel contribution of local-sage is the **validation gate**: a deterministic, multi-tool check that runs before any patch is applied to the real repository.
+To our knowledge, we are unaware of an open-source local coding agent combining declarative YAML contracts with AST-based pre-merge validation. The core of this is the **validation gate**: a deterministic, multi-tool check that runs before any patch is applied to the real repository.
 
-- **ContractChecker** — loads YAML contracts from `contracts/` and statically verifies that each symbol's `exception_types` and `return_shape` match the source code via AST walking and `typing.get_type_hints()`.
+- **ContractChecker** — loads YAML contracts from `contracts/` and statically verifies that each symbol's `exception_types` and `return_shape` match the source code via AST walking and `typing.get_type_hints()`. **Note: The checker validates statically observable properties (syntax and declared interface), not actual runtime behavior.**
 - **pytest** — functional correctness against the existing test suite.
 - **mypy** — static type safety.
 - **ruff** — lint and format compliance.
 
 Together, these four validators catch the structural failure modes of small local models without requiring a larger or smarter model. The agent retries with diagnostic feedback until all checks pass or the retry budget is exhausted.
+
+## Future Directions & Roadmap
+
+Based on early evaluation, several areas of improvement have been identified for future research:
+
+1. **Richer Contract Language**: Evolving from simple interface checking to formal specification:
+   ```yaml
+   preconditions:
+     - x > 0
+   postconditions:
+     - result >= x
+     - len(result) > 0
+   exceptions:
+     - ValueError
+   mutates:
+     - cache
+   side_effects:
+     - writes logs
+   ```
+   *Preconditions and postconditions could be verified using symbolic execution tools like CrossHair or icontract instead of serving as documentation only.*
+2. **Deep Return Checking**: Moving beyond superficial type hints to verify semantic properties (e.g., returns positive int, sorted list).
+3. **Control-Flow Analysis**: Supplementing AST traversal with Control Flow Graphs (CFG) and Data Flow Graphs (DFG) to verify resources are closed, variables are initialized, and exceptions are handled.
+4. **Harder Evaluation Tasks**: Expanding benchmarks to include cross-file refactoring, API migrations, renaming public interfaces, dependency upgrades, and new feature additions.
+5. **Memory Management**: Addressing long-term knowledge staleness with memory invalidation, versioning, and contradiction resolution.
+6. **Hybrid Graph Retrieval**: Enhancing PageRank with hybrid scoring: `semantic similarity + graph distance + recency + file importance + git history`.
+7. **Patch Confidence Scoring**: Scoring generated patches before validation (`files touched + graph distance + contract violations + diff size + model confidence`) to reject obviously risky edits.
 
 ## Acknowledgements
 

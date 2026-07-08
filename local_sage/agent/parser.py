@@ -124,6 +124,18 @@ class ModelOutputParser:
 
         return self._extract_from_scan(raw)
 
+    def extract_fenced_code(self, raw: str) -> str | None:
+        """Extract content from a ```python or plain ``` code fence."""
+        for marker in ("```python", "```py", "```"):
+            if marker in raw:
+                start = raw.index(marker) + len(marker)
+                if start < len(raw) and raw[start] == "\n":
+                    start += 1
+                closing = raw.find("```", start)
+                if closing != -1:
+                    return raw[start:closing].strip()
+        return None
+
     def _extract_fenced_diff(self, raw: str) -> str | None:
         """Extract content from a ```diff code fence."""
         marker = "```diff"

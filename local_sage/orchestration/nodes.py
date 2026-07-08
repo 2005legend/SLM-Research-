@@ -1,4 +1,4 @@
-﻿"""LangGraph node functions for Layer 2 â€” Orchestration.
+"""LangGraph node functions for Layer 2 â€” Orchestration.
 
 Each node is a pure function ``(state: AgentState) -> dict[str, Any]``
 that returns only the fields it modifies.  LangGraph merges the returned
@@ -17,7 +17,7 @@ from typing import Any
 from local_sage.agent.parser import ModelOutputParser
 from local_sage.config import SageConfig, load_config
 from local_sage.memory.session import SessionManager
-from local_sage.model.client import OllamaClient
+from local_sage.model.client import OllamaClient, get_client_sync
 from local_sage.orchestration.state import AgentState
 from local_sage.repo_graph.graph import SymbolGraph
 from local_sage.repo_graph.selector import ContextSelector
@@ -26,20 +26,26 @@ from local_sage.wiki.manager import WikiManager
 logger = logging.getLogger(__name__)
 
 CODE_GENERATOR_SYSTEM_PROMPT: str = (
-    "You are an expert Python engineer. "
-    "Output ONLY search-replace blocks in this exact format â€” no explanation, "
-    "no markdown fences, no other text:\n\n"
+    "You are an expert Python engineer.\n"
+    "CRITICAL FORMAT RULES:\n"
+    "- Output ONLY search-replace blocks, nothing else\n"
+    "- SEARCH text must be copied EXACTLY from the file shown\n"
+    "- REPLACE text must be the complete replacement\n"
+    "- Do not output explanations before or after blocks\n"
+    "- Do not output partial blocks\n"
+    "- If you cannot fit the change in one block, use multiple blocks\n"
+    "- Each block must be complete \u2014 never truncate mid-block\n\n"
     "<<<<<<< SEARCH\n"
-    "<exact text copied from the file shown, including indentation>\n"
+    "[exact text to find]\n"
     "=======\n"
-    "<replacement text>\n"
-    ">>>>>>> REPLACE\n\n"
-    "Rules:\n"
-    "- SEARCH text MUST be copied character-for-character from the file content shown.\n"
-    "- Include enough context lines (at least 3 before and after the change) "
-    "to make the match unique.\n"
-    "- Output multiple SEARCH/REPLACE blocks if needed.\n"
-    "- Do NOT output unified diffs, line numbers, or @@ markers."
+    "[replacement text]\n"
+    ">>>>>>> REPLACE"
+)
+
+API_CODE_GENERATOR_SYSTEM_PROMPT: str = (
+    "You are an expert Python engineer. "
+    "Output the FULL rewritten content of the target file inside a single standard ```python code block. "
+    "Do NOT use search/replace blocks or diffs. Include the ENTIRE file content with your changes applied."
 )
 
 
@@ -58,8 +64,11 @@ def planner_node(state: AgentState) -> dict[str, Any]:
     """
     import asyncio
 
+    if state.task.startswith("Goal:"):
+        return {"plan": []}
+
     load_config()
-    client = OllamaClient()
+    client = get_client_sync()
     system = (
         "You are a senior software engineer. "
         "Given a coding task, produce a numbered list of concrete implementation steps. "
@@ -96,6 +105,7 @@ def context_retriever_node(state: AgentState) -> dict[str, Any]:
     selector = ContextSelector()
     query = state.task + " " + " ".join(state.plan)
     context_symbols = selector.select(query, graph, top_k=config.top_k_context)
+    logger.warning(f"DEBUG: graph nodes={graph._graph.number_of_nodes()}, query='{query}', found={len(context_symbols)} symbols")
 
     # Search wiki for relevant entries
     wiki_dir = repo_root / config.wiki_dir
@@ -123,19 +133,8 @@ def code_generator_node(state: AgentState) -> dict[str, Any]:
 
     from local_sage.agent.parser import ModelOutputParser
 
-    client = OllamaClient()
-    prompt = _build_code_gen_prompt(state)
-    sr_blocks: list = []
-    try:
-        response = asyncio.run(
-            client.generate(prompt=prompt, system=CODE_GENERATOR_SYSTEM_PROMPT)
-        )
-        sr_blocks = ModelOutputParser().extract_search_replace_blocks(response.text)
-        if not sr_blocks:
-            logger.warning("no search-replace blocks found in model output")
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("code_generator_node: OllamaClient.generate failed: %s", exc)
-
+    client = get_client_sync()
+    sr_blocks = _execute_code_generation(state, client)
     patch_str = _build_patch_from_blocks(sr_blocks) if sr_blocks else ""
 
     new_retry_count = (
@@ -273,27 +272,28 @@ def memory_writer_node(state: AgentState) -> dict[str, Any]:
 
 
 def _load_graph(repo_root: Path, config: SageConfig) -> SymbolGraph:
-    """Load the SymbolGraph from cache, or return an empty graph.
+    """Load the SymbolGraph from cache, or build it if missing/stale.
 
     Args:
         repo_root: Repository root directory.
         config: Loaded SageConfig.
 
     Returns:
-        A ``SymbolGraph`` loaded from ``.sage/index.json``, or an empty one.
+        A ``SymbolGraph`` instance.
     """
     from local_sage.repo_graph.indexer import RepoIndexer
 
     cache_path = repo_root / config.sage_dir / "index.json"
     indexer = RepoIndexer()
     graph = indexer.load_index(cache_path)
-    if graph is None:
-        logger.info("No cached index found; using empty SymbolGraph.")
-        return SymbolGraph()
+    if not graph:
+        logger.info("Index is stale or missing, rebuilding...")
+        graph = indexer.index_repo(repo_root)
+        indexer.save_index(graph, cache_path)
     return graph
 
 
-def _build_code_gen_prompt(state: AgentState) -> str:
+def _build_local_code_gen_prompt(state: AgentState) -> str:
     """Build the code-generation prompt from the current agent state.
 
     Includes actual file content for any file path mentioned in the task
@@ -355,6 +355,8 @@ def _extract_file_content_for_task(task: str) -> str:
         full_path = repo_root / normalized
         if full_path.is_file():
             content = full_path.read_text(encoding="utf-8")
+            if len(content) > 12000:
+                content = content[:12000] + "\n... [TRUNCATED DUE TO CONTEXT LIMIT]"
             blocks.append(
                 f"\nCURRENT CONTENT of {normalized.as_posix()}:\n"
                 f"```python\n{content}\n```"
@@ -362,7 +364,7 @@ def _extract_file_content_for_task(task: str) -> str:
     return "\n".join(blocks)
 
 
-def _build_symbol_snippets(context_symbols: list) -> str:
+def _build_symbol_snippets(context_symbols: list[Any]) -> str:
     """Build a code snippet block from context symbols.
 
     Uses the full source for each symbol (no truncation) up to 5 symbols.
@@ -399,7 +401,7 @@ def _write_wiki_entry(wiki_manager: WikiManager, state: AgentState) -> None:
         logger.warning("memory_writer_node: WikiManager.write_entry failed: %s", exc)
 
 
-def _build_patch_from_blocks(sr_blocks: list) -> str:
+def _build_patch_from_blocks(sr_blocks: list[Any]) -> str:
     import difflib
     repo_root = Path.cwd()
     patch_str = ""
@@ -418,10 +420,81 @@ def _build_patch_from_blocks(sr_blocks: list) -> str:
             new_lines = new_text.splitlines(keepends=True)
             rel_path = target.relative_to(repo_root).as_posix()
             diff = list(difflib.unified_diff(
-                original_lines,
-                new_lines,
+                original_lines, new_lines,
                 fromfile=f"a/{rel_path}",
-                tofile=f"b/{rel_path}"
+                tofile=f"b/{rel_path}",
+                n=3
             ))
-            patch_str += "".join(diff)
+            patch_str += "".join(diff) + "\n"
     return patch_str
+
+
+def _get_target_file_content(state: AgentState) -> str | None:
+    if not state.context_symbols:
+        return None
+    target_symbol = state.context_symbols[0]
+    repo_root = Path.cwd()
+    file_path = repo_root / target_symbol.file_path
+    if file_path.exists():
+        content = file_path.read_text(encoding="utf-8")
+        if len(content) > 12000:
+            content = content[:12000] + "\n... [TRUNCATED DUE TO CONTEXT LIMIT]"
+        return content
+    return None
+
+
+def _build_api_code_gen_prompt(state: AgentState) -> str:
+    """Build the code-generation prompt for an API model (full file replacement)."""
+    parts: list[str] = [f"Task: {state.task}\n"]
+    if state.plan:
+        plan_str = "Plan:\n" + "\n".join(f"  {i + 1}. {s}" for i, s in enumerate(state.plan))
+        parts.append(plan_str)
+        
+    if state.wiki_context:
+        wiki_text = "\n\n".join(f"## {e.title}\n{e.content[:300]}" for e in state.wiki_context[:3])
+        parts.append(f"\nWiki context:\n{wiki_text}")
+        
+    if state.validation_result is not None and not state.validation_result.passed:
+        parts.append(f"\nPrevious attempt failed:\n{state.validation_result.to_retry_prompt()}")
+        
+    original_content = _get_target_file_content(state)
+    if original_content:
+        parts.append(f"\nTarget file content:\n```python\n{original_content}\n```")
+        
+    parts.append(
+        "\nOutput the FULL rewritten content of the target file inside a single ```python code block."
+    )
+    return "\n".join(parts)
+
+
+def _execute_code_generation(state: AgentState, client: Any) -> list[Any]:
+    import asyncio
+    from local_sage.agent.parser import ModelOutputParser
+
+    prompt = _build_local_code_gen_prompt(state)
+    system_prompt = CODE_GENERATOR_SYSTEM_PROMPT
+        
+    original_content = _extract_file_content_for_task(state.task)
+    if not original_content and state.context_symbols:
+        original_content = _build_symbol_snippets(state.context_symbols)
+
+    if original_content:
+        lines = original_content.splitlines()
+        est_tokens = (len(prompt) + len(system_prompt)) // 4
+        logger.warning(f"code_generator_node: context lines={len(lines)}, estimated tokens={est_tokens}")
+        if est_tokens > 4000:
+            logger.warning(f"code_generator_node: Prompt token count ({est_tokens}) exceeds 4000. Context was truncated.")
+        first_lines = "\\n".join(lines[:3])
+        logger.warning(f"code_generator_node: First 3 lines of context: {first_lines}")
+
+    sr_blocks: list[Any] = []
+    try:
+        response = asyncio.run(client.generate(prompt=prompt, system=system_prompt))
+        sr_blocks = ModelOutputParser().extract_search_replace_blocks(response.text)
+            
+        if not sr_blocks:
+            logger.warning("no search-replace blocks found in model output")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("code_generator_node: generate failed: %s", exc)
+        
+    return sr_blocks

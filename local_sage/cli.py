@@ -1,4 +1,4 @@
-﻿"""Layer 0 â€” CLI: Typer application with all sage subcommands.
+"""Layer 0 â€” CLI: Typer application with all sage subcommands.
 
 All commands are thin wrappers that delegate to the appropriate layer.
 Rich is used for all terminal output.
@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import warnings
+from typing import Any
 from pathlib import Path
 
 # Suppress upstream LangGraph / LangChain deprecation warnings at runtime.
@@ -65,7 +66,7 @@ def start() -> None:
     _repl(config, repo_root, session_id, session_manager)
 
 
-def _boot(config: object, repo_root: Path) -> tuple:
+def _boot(config: object, repo_root: Path) -> tuple[Any, Any, Any]:
     """Index the repo and load/create a session.
 
     Args:
@@ -317,8 +318,104 @@ def task(description: str = typer.Argument(..., help="Task description")) -> Non
         console.print("[bold red]âœ— Task failed â€” no patch applied.[/bold red]")
         if result:
             console.print(result.to_retry_prompt())
+# ---------------------------------------------------------------------------
+# sage plan
+# ---------------------------------------------------------------------------
 
 
+@app.command()
+def plan(
+    goal: str,
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+) -> None:
+    """Decompose a goal into multi-file atomic tasks and execute them."""
+    config = load_config()
+    repo_root = Path.cwd()
+
+    from local_sage.memory.session import SessionManager
+    from local_sage.agent.harness import HarnessPlanner
+
+    db_path = repo_root / config.sage_dir / "memory.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    session_manager = SessionManager(db_path)
+    session = session_manager.load_latest_session(repo_root)
+    session_id = session.session_id if session else session_manager.create_session(repo_root)
+
+    planner = HarnessPlanner()
+    tasks = _generate_ai_plan(planner, goal)
+            
+    if not tasks:
+        console.print("[yellow]No tasks planned.[/yellow]")
+        return
+        
+    from local_sage.agent.harness import HarnessError
+    valid_tasks, errors = planner.validate_plan(tasks, None, repo_root)
+    if errors:
+        console.print("[bold red]Plan validation failed! Resolving these issues is REQUIRED before execution:[/bold red]")
+        for err in errors:
+            console.print(f"[red] - {err}[/red]")
+        console.print("\n[yellow]Please rephrase your goal to fix these issues.[/yellow]")
+        raise typer.Exit(code=1)
+        
+    tasks = valid_tasks
+        
+    _execute_plan_interactive(tasks, session_id, repo_root, config, skip_confirm=yes)
+
+
+def _load_manual_plan(plan_path_str: str) -> list[Any]:
+    import json
+    import uuid
+    from local_sage.agent.harness import AtomicTask
+    plan_path = Path(plan_path_str)
+    if not plan_path.exists():
+        console.print(f"[red]Manual plan not found: {plan_path}[/red]")
+        raise typer.Exit(code=1)
+    raw_tasks = json.loads(plan_path.read_text(encoding="utf-8"))
+    return [
+        AtomicTask(
+            id=t.get("id", str(uuid.uuid4())),
+            description=t.get("description", ""),
+            target_file=t.get("target_file", ""),
+            target_symbol=t.get("target_symbol"),
+            depends_on=t.get("depends_on", []),
+        ) for t in raw_tasks.get("tasks", [])
+    ]
+
+
+def _generate_ai_plan(planner: Any, goal: str) -> list[Any]:
+    with console.status(f"Decomposing goal: {goal}"):
+        return planner.plan(goal)  # type: ignore
+
+
+def _execute_plan_interactive(tasks: list[Any], session_id: str, repo_root: Path, config: object, skip_confirm: bool = False) -> None:
+    from local_sage.agent.harness import HarnessExecutor
+    from local_sage.validation.consistency import ConsistencyChecker
+
+    console.print(f"[bold cyan]Generated Plan with {len(tasks)} tasks:[/bold cyan]")
+    for i, t in enumerate(tasks, 1):
+        console.print(f"  {i}. {t.description} -> {t.target_file}")
+        
+    # Bypassing prompt for non-interactive execution
+    # if not skip_confirm:
+    #     user_input = typer.prompt("Execute this plan?", default="Y")
+    #     if user_input.lower() not in ("y", "yes"):
+    #         console.print("[dim]Aborted by user.[/dim]")
+    #         return
+
+    executor = HarnessExecutor()
+    with console.status("Executing plan tasks..."):
+        result = executor.execute_plan(session_id, tasks, repo_root, config)
+        
+    checker = ConsistencyChecker()
+    modified_files = list(set([str(repo_root / t.target_file) for t in tasks]))
+    failures = checker.check(repo_root, files=modified_files)
+    
+    if result.passed and not failures:
+        console.print("[bold green][OK] Harness plan executed successfully![/bold green]")
+    else:
+        console.print("[bold red]x Harness plan failed or consistency issues found.[/bold red]")
+        for f in failures:
+            console.print(f"[red]{f.message}[/red]")
 # ---------------------------------------------------------------------------
 # sage validate
 # ---------------------------------------------------------------------------
@@ -389,11 +486,13 @@ def status() -> None:
     index_info = _get_index_info(repo_root, config)
     session_info = _get_session_info(repo_root, config)
 
-    from local_sage.model.client import OllamaClient
+    from local_sage.model.client import get_client_sync
+    
+    client = get_client_sync()
 
     console.print(
         Panel(
-            f"[bold]Model[/bold]: {OllamaClient.MODEL}  {model_status}\n"
+            f"[bold]Model[/bold]: {client.MODEL}  {model_status}\n"
             f"[bold]Repo index[/bold]: {index_info}\n"
             f"[bold]Session[/bold]: {session_info}",
             title="local-sage status",
@@ -403,11 +502,13 @@ def status() -> None:
 
 def _get_model_status() -> str:
     """Return a Rich-formatted model online/offline status string."""
-    from local_sage.model.client import OllamaClient
+    from local_sage.model.client import get_client_sync
 
-    client = OllamaClient()
+    client = get_client_sync()
     online = asyncio.run(client.health_check())
-    return "[green][OK] online[/green]" if online else "[red][X] offline[/red]"
+    
+    model_name = client.MODEL
+    return f"[green][OK] online ({model_name})[/green]" if online else "[red][X] offline[/red]"
 
 
 def _get_index_info(repo_root: Path, config: object) -> str:

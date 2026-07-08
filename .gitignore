@@ -3,7 +3,7 @@
 /wiki/
 
 # Environment — contains model config, never commit secrets
-.env
+.env*
 
 # Python
 __pycache__/

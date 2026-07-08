@@ -82,7 +82,7 @@ class TestPlannerNode:
         state = AgentState(task="add rate limiter")
         mock_response = _mock_response("1. Design the limiter\n2. Implement it\n3. Test it")
 
-        with patch("local_sage.orchestration.nodes.OllamaClient") as MockClient:
+        with patch("local_sage.orchestration.nodes.get_client_sync") as MockClient:
             instance = MockClient.return_value
             instance.generate = AsyncMock(return_value=mock_response)
             result = planner_node(state)
@@ -95,7 +95,7 @@ class TestPlannerNode:
         """planner_node() returns a single-step plan when OllamaClient fails."""
         state = AgentState(task="add rate limiter")
 
-        with patch("local_sage.orchestration.nodes.OllamaClient") as MockClient:
+        with patch("local_sage.orchestration.nodes.get_client_sync") as MockClient:
             instance = MockClient.return_value
             instance.generate = AsyncMock(side_effect=Exception("connection refused"))
             result = planner_node(state)
@@ -109,7 +109,7 @@ class TestPlannerNode:
         state = AgentState(task="task")
         mock_response = _mock_response("step 1\n\nstep 2\n\n")
 
-        with patch("local_sage.orchestration.nodes.OllamaClient") as MockClient:
+        with patch("local_sage.orchestration.nodes.get_client_sync") as MockClient:
             instance = MockClient.return_value
             instance.generate = AsyncMock(return_value=mock_response)
             result = planner_node(state)
@@ -158,7 +158,7 @@ class TestCodeGeneratorNode:
         state = AgentState(task="add rate limiter")
         mock_response = _mock_response("--- a/foo.py\n+++ b/foo.py\n@@ -1 +1 @@\n-x\n+y\n")
 
-        with patch("local_sage.orchestration.nodes.OllamaClient") as MockClient:
+        with patch("local_sage.orchestration.nodes.get_client_sync") as MockClient:
             instance = MockClient.return_value
             instance.generate = AsyncMock(return_value=mock_response)
             result = code_generator_node(state)
@@ -171,7 +171,7 @@ class TestCodeGeneratorNode:
         state = AgentState(task="task", retry_count=1, validation_result=_failing_result())
         mock_response = _mock_response("diff")
 
-        with patch("local_sage.orchestration.nodes.OllamaClient") as MockClient:
+        with patch("local_sage.orchestration.nodes.get_client_sync") as MockClient:
             instance = MockClient.return_value
             instance.generate = AsyncMock(return_value=mock_response)
             result = code_generator_node(state)
@@ -183,7 +183,7 @@ class TestCodeGeneratorNode:
         state = AgentState(task="task", retry_count=0, validation_result=None)
         mock_response = _mock_response("diff")
 
-        with patch("local_sage.orchestration.nodes.OllamaClient") as MockClient:
+        with patch("local_sage.orchestration.nodes.get_client_sync") as MockClient:
             instance = MockClient.return_value
             instance.generate = AsyncMock(return_value=mock_response)
             result = code_generator_node(state)
@@ -194,7 +194,7 @@ class TestCodeGeneratorNode:
         """code_generator_node() returns empty patch when OllamaClient fails."""
         state = AgentState(task="task")
 
-        with patch("local_sage.orchestration.nodes.OllamaClient") as MockClient:
+        with patch("local_sage.orchestration.nodes.get_client_sync") as MockClient:
             instance = MockClient.return_value
             instance.generate = AsyncMock(side_effect=Exception("timeout"))
             result = code_generator_node(state)
@@ -206,7 +206,7 @@ class TestCodeGeneratorNode:
         state = AgentState(task="add rate limiter")
         mock_response = _mock_response("--- a/foo.py\n+++ b/foo.py\n@@ -1 +1 @@\n-x\n+y\n")
 
-        with patch("local_sage.orchestration.nodes.OllamaClient") as MockClient:
+        with patch("local_sage.orchestration.nodes.get_client_sync") as MockClient:
             instance = MockClient.return_value
             instance.generate = AsyncMock(return_value=mock_response)
             code_generator_node(state)
@@ -221,7 +221,7 @@ class TestCodeGeneratorNode:
         state = AgentState(task="task")
         mock_response = _mock_response("Here is my explanation with no diff.")
 
-        with patch("local_sage.orchestration.nodes.OllamaClient") as MockClient:
+        with patch("local_sage.orchestration.nodes.get_client_sync") as MockClient:
             instance = MockClient.return_value
             instance.generate = AsyncMock(return_value=mock_response)
             with caplog.at_level(logging.WARNING):

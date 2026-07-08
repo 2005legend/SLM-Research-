@@ -9,6 +9,7 @@ returned dict back into the state.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from local_sage.repo_graph.graph import SymbolInfo
 from local_sage.validation.result import ValidationResult
@@ -50,7 +51,7 @@ class AgentState:
     context_symbols: list[SymbolInfo] = field(default_factory=list)
     wiki_context: list[WikiEntry] = field(default_factory=list)
     patch: str | None = None
-    sr_blocks: list = field(default_factory=list)  # SearchReplaceBlock list
+    sr_blocks: list[Any] = field(default_factory=list)  # SearchReplaceBlock list
     validation_result: ValidationResult | None = None
     retry_count: int = 0
     max_retries: int = 3

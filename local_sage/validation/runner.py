@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import time
 from pathlib import Path
+from typing import Any
 
 from local_sage.agent.parser import ModelOutputParser
 from local_sage.validation.contracts import ContractChecker
@@ -168,7 +169,7 @@ class ValidationRunner:
         finally:
             self._patcher.revert(temp_dir)
 
-    def validate_search_replace(self, blocks: list) -> ValidationResult:
+    def validate_search_replace(self, blocks: list[Any]) -> ValidationResult:
         """Validate search-replace blocks without applying them to the repo.
 
         Applies the blocks to a temporary copy and runs all four validators.
@@ -277,17 +278,43 @@ class ValidationRunner:
         pytest_counts = self._run_pytest(temp_dir, failures)
         mypy_errors = self._run_mypy(temp_dir, failures)
         ruff_violations = self._run_ruff(temp_dir, failures)
-        contract_failures = self._run_contracts(failures)
+        contract_failures = self._run_contracts(temp_dir, failures)
 
         duration_ms = int(time.time() * 1000) - start_ms
+        
+        # Calculate confidence score
+        from local_sage.validation.confidence import PatchConfidenceScorer
+        scorer = PatchConfidenceScorer()
+        
+        # We need CFG warnings count. For now, CFGChecker is run by ConsistencyChecker outside this loop, 
+        # or we can run it here! Let's run it here.
+        from local_sage.validation.cfg import CFGChecker
+        cfg_warnings = 0
+        cfg_checker = CFGChecker()
+        for py_file in temp_dir.rglob("*.py"):
+            try:
+                warnings = cfg_checker.check_source(py_file.read_text(encoding="utf-8"))
+                cfg_warnings += len(warnings)
+            except Exception:
+                pass
+                
+        confidence = scorer.score(
+            syntax_passed=True, # if we got here, it parsed
+            mypy_passed=len(mypy_errors) == 0 if mypy_errors is not None else True,
+            cfg_warnings=cfg_warnings,
+            contract_passed=len(contract_failures) == 0 if contract_failures is not None else True,
+            complexity_score=0 # placeholder
+        )
+        
         return ValidationResult(
-            passed=len(failures) == 0,
+            passed=(len(failures) == 0) and confidence.passed,
             failures=failures,
             pytest_counts=pytest_counts,
             mypy_errors=mypy_errors,
             ruff_violations=ruff_violations,
             contract_failures=contract_failures,
             duration_ms=duration_ms,
+            confidence_score=confidence.score,
         )
 
     def _run_pytest(
@@ -367,20 +394,24 @@ class ValidationRunner:
         return violations
 
     def _run_contracts(
-        self, failures: list[ValidationFailure]
+        self, temp_dir: Path, failures: list[ValidationFailure]
     ) -> list[ContractFailure] | None:
-        """Run contract checker against repo_root and append failures.
+        """Run contract checker and append failures.
 
-        Contract YAML files live in repo_root/contracts/ — always pass
-        self._repo_root, never temp_dir.
+        Contract YAML files live in repo_root/contracts/, but the source
+        code being validated is in temp_dir.
 
         Args:
+            temp_dir: Directory to run contract checks against.
             failures: Mutable list to append failures to.
 
         Returns:
             List of ``ContractFailure`` objects.
         """
-        contract_failures = self._contract_checker.check(self._repo_root)
+        contract_failures = self._contract_checker.check(
+            contracts_dir=self._repo_root / "contracts",
+            source_dir=temp_dir
+        )
         if contract_failures:
             failures.append(
                 ValidationFailure(

@@ -13,6 +13,7 @@ import logging
 import shutil
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import whatthepatch
 
@@ -71,7 +72,7 @@ class Patcher:
     # Search-replace public API
     # ------------------------------------------------------------------
 
-    def apply_search_replace_to_temp(self, repo_root: Path, blocks: list) -> Path:
+    def apply_search_replace_to_temp(self, repo_root: Path, blocks: list[Any]) -> Path:
         """Copy repo to a temp dir and apply search-replace blocks there.
 
         Args:
@@ -86,7 +87,7 @@ class Patcher:
         self.apply_search_replace(temp_path, blocks)
         return temp_path
 
-    def apply_search_replace(self, repo_root: Path, blocks: list) -> None:
+    def apply_search_replace(self, repo_root: Path, blocks: list[Any]) -> None:
         """Apply a list of search-replace blocks to files under *repo_root*.
 
         No line numbers needed — pure exact text matching.
@@ -253,7 +254,7 @@ class Patcher:
                 patch_preview=patch[:200],
             )
 
-    def _apply_all_diffs(self, target_dir: Path, diffs: list) -> tuple[int, int]:
+    def _apply_all_diffs(self, target_dir: Path, diffs: list[Any]) -> tuple[int, int]:
         """Apply each diff object and return (applied_count, skipped_count).
 
         Args:

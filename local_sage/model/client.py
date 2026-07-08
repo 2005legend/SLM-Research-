@@ -58,7 +58,7 @@ class OllamaClient:
 
     BASE_URL: ClassVar[str] = "http://localhost:11434"
     MODEL: ClassVar[str] = "qwen2.5-coder:7b"
-    TIMEOUT_SECONDS: ClassVar[int] = 120
+    TIMEOUT_SECONDS: ClassVar[int] = 600
 
     async def generate(self, prompt: str, system: str = "") -> ModelResponse:
         """Send a generation request to the Ollama ``/api/generate`` endpoint.
@@ -159,3 +159,126 @@ class OllamaClient:
             finish_reason=str(data.get("done_reason", "stop")),
             duration_ms=int(total_ns) // 1_000_000 if isinstance(total_ns, (int, float)) else 0,
         )
+
+
+import os
+from pathlib import Path
+
+def _load_env() -> None:
+    env_path = Path.cwd() / ".env"
+    if env_path.is_file():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, val = line.split("=", 1)
+                os.environ.setdefault(key.strip(), val.strip())
+
+_load_env()
+
+class GroqClient:
+    """Async HTTP client wrapping the Groq chat completions endpoint."""
+
+    BASE_URL: ClassVar[str] = "https://api.groq.com/openai/v1/chat/completions"
+    MODEL: ClassVar[str] = "llama-3.1-8b-instant"
+    TIMEOUT_SECONDS: ClassVar[int] = 120
+    
+    @property
+    def API_KEY(self) -> str:
+        return os.environ.get("GROQ_API_KEY", "")
+
+    async def generate(self, prompt: str, system: str = "") -> ModelResponse:
+        """Send a generation request to the Groq chat endpoint."""
+        from local_sage.config import load_config
+        config = load_config()
+        
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        payload: dict[str, object] = {
+            "model": config.groq_model,
+            "messages": messages,
+            "temperature": 0.0,
+            "max_tokens": 2048,
+        }
+        
+        headers = {
+            "Authorization": f"Bearer {self.API_KEY}",
+            "Content-Type": "application/json",
+        }
+        
+        response = await self._post_groq(payload, headers)
+        return self._parse_groq_response(response)
+
+    async def _post_groq(self, payload: dict[str, object], headers: dict[str, str]) -> httpx.Response:
+        timeout = httpx.Timeout(self.TIMEOUT_SECONDS)
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(self.BASE_URL, json=payload, headers=headers)
+        except httpx.ConnectError as exc:
+            raise OllamaConnectionError(f"Cannot connect to Groq at {self.BASE_URL}.") from exc
+        except httpx.TimeoutException as exc:
+            raise OllamaTimeoutError(f"Request to {self.BASE_URL} timed out.") from exc
+
+        if response.status_code != 200:
+            raise OllamaRequestError(
+                f"Groq returned HTTP {response.status_code}.",
+                status_code=response.status_code,
+                body=response.text,
+            )
+        return response
+
+    def _parse_groq_response(self, response: httpx.Response) -> ModelResponse:
+        data = response.json()
+        choices = data.get("choices", [])
+        text = choices[0].get("message", {}).get("content", "") if choices else ""
+        usage = data.get("usage", {})
+        
+        return ModelResponse(
+            text=text,
+            tokens_used=usage.get("completion_tokens", 0),
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            finish_reason=choices[0].get("finish_reason", "stop") if choices else "stop",
+            duration_ms=0,
+        )
+
+    async def health_check(self) -> bool:
+        """Always return True for Groq since it's a managed API."""
+        return True
+
+
+async def get_client() -> OllamaClient | GroqClient:
+    """Return an appropriate client (Groq if config.model_provider == 'groq', else Ollama)."""
+    from local_sage.config import load_config
+    config = load_config()
+    
+    if config.model_provider == "groq" and os.environ.get("GROQ_API_KEY"):
+        return GroqClient()
+    
+    ollama = OllamaClient()
+    if await ollama.health_check():
+        return ollama
+    
+    if os.environ.get("GROQ_API_KEY"):
+        return GroqClient()
+        
+    return ollama
+
+
+def get_client_sync() -> OllamaClient | GroqClient:
+    """Synchronous helper to fetch the appropriate client."""
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    
+    if loop and loop.is_running():
+        # If there's a running loop, we can't use asyncio.run
+        # But this might not work if we're in a synchronous function called from async.
+        # Fallback to Ollama or create a new thread. Usually in LangGraph nodes we use asyncio.run safely.
+        pass
+        
+    return asyncio.run(get_client())
+
