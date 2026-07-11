@@ -16,6 +16,7 @@ from __future__ import annotations
 import ast
 import importlib
 import logging
+import re
 import sys
 import typing
 from dataclasses import dataclass, field
@@ -26,6 +27,29 @@ from local_sage.validation.exceptions import ContractParseError
 from local_sage.validation.result import ContractFailure
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# AST Helper Classes
+# ---------------------------------------------------------------------------
+
+
+class _FunctionASTVisitor(ast.NodeVisitor):
+    """AST visitor to find a specific function by name."""
+    
+    def __init__(self, function_name: str):
+        self.function_name = function_name
+        self.function_node: ast.FunctionDef | ast.AsyncFunctionDef | None = None
+    
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        if node.name == self.function_name:
+            self.function_node = node
+        self.generic_visit(node)
+    
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        if node.name == self.function_name:
+            self.function_node = node
+        self.generic_visit(node)
 
 
 # ---------------------------------------------------------------------------
@@ -534,6 +558,216 @@ class ContractChecker:
             class_name, method_name = function_name.split(".", 1)
             return getattr(getattr(module, class_name), method_name)
         return getattr(module, function_name)
+
+    async def fix_contract_violation(
+        self, 
+        failure: ContractFailure, 
+        source_dir: Path, 
+        contracts_dir: Path
+    ) -> str | None:
+        """Use a language model to fix a contract violation by generating corrected code.
+        
+        Args:
+            failure: The contract failure to fix
+            source_dir: Directory containing the source files
+            contracts_dir: Directory containing the contract files
+            
+        Returns:
+            The corrected source code as a string, or None if no fix could be generated
+        """
+        contract = self._find_contract_for_failure(failure, contracts_dir)
+        if contract is None:
+            return None
+            
+        original_code = self._read_source_file(contract, source_dir)
+        if original_code is None:
+            return None
+            
+        client = await self._get_model_client()
+        if client is None:
+            return None
+            
+        return await self._generate_and_apply_fix(failure, contract, original_code, client)
+
+    def _find_contract_for_failure(self, failure: ContractFailure, contracts_dir: Path) -> Contract | None:
+        """Find the contract associated with a failure."""
+        contracts = self.load_contracts(contracts_dir)
+        for contract in contracts:
+            if contract.symbol_id == failure.symbol_id:
+                return contract
+        logger.warning("Contract not found for failure: %s", failure.symbol_id)
+        return None
+
+    def _read_source_file(self, contract: Contract, source_dir: Path) -> str | None:
+        """Read the source file for a contract."""
+        source_file = source_dir / contract.source_file
+        if not source_file.exists():
+            logger.warning("Source file not found: %s", source_file)
+            return None
+        try:
+            return source_file.read_text(encoding="utf-8")
+        except Exception as exc:
+            logger.warning("Failed to read source file %s: %s", source_file, exc)
+            return None
+
+    async def _get_model_client(self):
+        """Get a language model client (provider-agnostic)."""
+        try:
+            from local_sage.model.client import get_client
+            return await get_client()
+        except Exception as exc:
+            logger.warning("Failed to get model client: %s", exc)
+            return None
+
+    async def _generate_and_apply_fix(
+        self, 
+        failure: ContractFailure, 
+        contract: Contract, 
+        original_code: str, 
+        client
+    ) -> str | None:
+        """Generate a fix using the model and apply it."""
+        system_prompt = self._build_system_prompt()
+        user_prompt = self._build_user_prompt(failure, contract, original_code)
+        
+        try:
+            response = await client.generate(user_prompt, system_prompt)
+            logger.info("LLM response for %s: %s", failure.symbol_id, response.text[:200])
+            return self._apply_search_replace_fix(original_code, response.text)
+        except Exception as exc:
+            logger.warning("Failed to generate fix with LLM: %s", exc)
+            return None
+
+    def _build_system_prompt(self) -> str:
+        """Build the system prompt for the model."""
+        return """You are a code fixing assistant. Your task is to fix contract violations in Python code.
+
+Rules:
+1. You MUST output the corrected code in search-replace format
+2. Each fix should be in a block like this:
+```search-replace
+OLD_CODE_HERE
+---
+NEW_CODE_HERE
+```
+3. Be precise - only fix the specific violation mentioned
+4. Do not make unnecessary changes to working code
+5. Preserve all existing functionality while fixing the contract violation"""
+
+    def _build_user_prompt(self, failure: ContractFailure, contract: Contract, original_code: str) -> str:
+        """Build the user prompt for the model."""
+        return f"""Fix the following contract violation:
+
+Contract: {failure.symbol_id}
+Violation: {failure.constraint}
+Details: {failure.actual}
+
+Allowed exception types: {contract.exception_types}
+Expected return shape: {contract.return_shape}
+
+Source code to fix:
+```python
+{original_code}
+```
+
+Please provide the fix in search-replace format."""
+            
+    def _apply_search_replace_fix(self, original_code: str, llm_response: str) -> str | None:
+        """Apply search-replace blocks from LLM response to the original code.
+        
+        Args:
+            original_code: The original source code
+            llm_response: LLM response containing search-replace blocks
+            
+        Returns:
+            The fixed code or None if no valid fixes were found
+        """
+        logger.info("LLM full response: %s", llm_response)
+        
+        matches = self._extract_search_replace_blocks(llm_response)
+        if not matches:
+            return None
+            
+        return self._apply_replacements(original_code, matches)
+
+    def _extract_search_replace_blocks(self, llm_response: str) -> list[tuple[str, str]]:
+        """Extract search-replace blocks from LLM response."""
+        pattern = r'```search-replace\n(.*?)\n---\n(.*?)\n```'
+        matches = re.findall(pattern, llm_response, re.DOTALL)
+        
+        if not matches:
+            logger.warning("No search-replace blocks found in LLM response")
+            # Try alternative patterns
+            alt_pattern = r'```search-replace\n(.*?)\n-+\n(.*?)\n```'
+            matches = re.findall(alt_pattern, llm_response, re.DOTALL)
+            
+        if not matches:
+            logger.warning("No search-replace blocks found with alternative pattern")
+            
+        return matches
+
+    def _apply_replacements(self, original_code: str, matches: list[tuple[str, str]]) -> str | None:
+        """Apply replacement matches to the original code."""
+        fixed_code = original_code
+        
+        for old_code, new_code in matches:
+            old_code = old_code.strip()
+            new_code = new_code.strip()
+            
+            logger.info("Trying to replace:\n'%s'\nwith:\n'%s'", old_code, new_code)
+            
+            if self._try_exact_replacement(fixed_code, old_code, new_code):
+                fixed_code = fixed_code.replace(old_code, new_code)
+                logger.info("Applied fix: replaced %d chars", len(old_code))
+            elif self._try_flexible_replacement(fixed_code, old_code, new_code):
+                fixed_code = self._apply_flexible_replacement(fixed_code, old_code, new_code)
+                logger.info("Applied flexible fix")
+            else:
+                logger.warning("Could not find old code block in source: %s", old_code[:100])
+                
+        return fixed_code if fixed_code != original_code else None
+
+    def _try_exact_replacement(self, code: str, old_code: str, new_code: str) -> bool:
+        """Try exact string replacement."""
+        return old_code in code
+
+    def _try_flexible_replacement(self, code: str, old_code: str, new_code: str) -> bool:
+        """Check if flexible replacement is possible (ignoring comments)."""
+        lines_to_find = old_code.split('\n')
+        source_lines = code.split('\n')
+        
+        for i in range(len(source_lines) - len(lines_to_find) + 1):
+            if self._lines_match_ignoring_comments(source_lines[i:i+len(lines_to_find)], lines_to_find):
+                return True
+        return False
+
+    def _apply_flexible_replacement(self, code: str, old_code: str, new_code: str) -> str:
+        """Apply flexible replacement ignoring trailing comments."""
+        lines_to_find = old_code.split('\n')
+        source_lines = code.split('\n')
+        
+        for i in range(len(source_lines) - len(lines_to_find) + 1):
+            if self._lines_match_ignoring_comments(source_lines[i:i+len(lines_to_find)], lines_to_find):
+                new_lines = source_lines[:i] + new_code.split('\n') + source_lines[i + len(lines_to_find):]
+                return '\n'.join(new_lines)
+        return code
+
+    def _lines_match_ignoring_comments(self, source_lines: list[str], pattern_lines: list[str]) -> bool:
+        """Check if lines match, ignoring trailing comments."""
+        if len(source_lines) != len(pattern_lines):
+            return False
+            
+        for source_line, pattern_line in zip(source_lines, pattern_lines):
+            # Remove inline comments for comparison
+            if '#' in source_line:
+                source_clean = source_line[:source_line.find('#')].rstrip()
+            else:
+                source_clean = source_line
+                
+            if source_clean.strip() != pattern_line.strip():
+                return False
+        return True
+        return fixed_code if fixed_code != original_code else None
 
 
 # ---------------------------------------------------------------------------

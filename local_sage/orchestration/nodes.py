@@ -298,6 +298,9 @@ def _build_local_code_gen_prompt(state: AgentState) -> str:
 
     Includes actual file content for any file path mentioned in the task
     so the model generates diffs with correct context lines.
+    
+    Uses windowed context for better token efficiency when context_symbols
+    are available.
 
     Args:
         state: Current agent state.
@@ -305,18 +308,36 @@ def _build_local_code_gen_prompt(state: AgentState) -> str:
     Returns:
         A formatted prompt string for the code generator.
     """
+    from local_sage.agent.context import get_windowed_context
+    
     parts: list[str] = [f"Task: {state.task}\n"]
     if state.plan:
         parts.append("Plan:\n" + "\n".join(f"  {i + 1}. {s}" for i, s in enumerate(state.plan)))
 
-    # Include full content of any file explicitly mentioned in the task
-    file_content_block = _extract_file_content_for_task(state.task)
-    if file_content_block:
-        parts.append(file_content_block)
-    elif state.context_symbols:
-        # Fall back to truncated symbol snippets when no explicit file named
-        snippets = _build_symbol_snippets(state.context_symbols)
-        parts.append(f"\nRelevant code:\n{snippets}")
+    # Prefer windowed context from context_symbols for better token efficiency
+    if state.context_symbols:
+        repo_root = Path.cwd()
+        # Use the first (most relevant) symbol for windowed context
+        target_symbol = state.context_symbols[0]
+        windowed = get_windowed_context(target_symbol, repo_root, context_lines=20)
+        if windowed:
+            parts.append(
+                f"\nTARGET FILE: {target_symbol.file_path}\n"
+                f"```python\n{windowed}\n```"
+            )
+            logger.debug(
+                f"_build_local_code_gen_prompt: using windowed context for "
+                f"{target_symbol.file_path}, {len(windowed.splitlines())} lines"
+            )
+        else:
+            # Fall back to symbol snippets if windowed context fails
+            snippets = _build_symbol_snippets(state.context_symbols)
+            parts.append(f"\nRelevant code:\n{snippets}")
+    else:
+        # No context symbols, try to extract from task
+        file_content_block = _extract_file_content_for_task(state.task)
+        if file_content_block:
+            parts.append(file_content_block)
 
     if state.wiki_context:
         wiki_text = "\n\n".join(f"## {e.title}\n{e.content[:300]}" for e in state.wiki_context[:3])
@@ -331,14 +352,18 @@ def _build_local_code_gen_prompt(state: AgentState) -> str:
     return "\n".join(parts)
 
 
-def _extract_file_content_for_task(task: str) -> str:
+def _extract_file_content_for_task(task: str, use_windowed: bool = False) -> str:
     """Return a prompt block with actual file content for files named in *task*.
 
     Scans the task string for Python file paths (``*.py``), reads each file
     from disk relative to ``Path.cwd()``, and returns a formatted block.
+    
+    When use_windowed is True and context_symbols is available, uses windowed
+    context instead of full file content to stay within token limits.
 
     Args:
         task: Natural-language task description.
+        use_windowed: If True, prefer windowed context for better token efficiency.
 
     Returns:
         Formatted string with file content blocks, or empty string if none found.
@@ -355,8 +380,10 @@ def _extract_file_content_for_task(task: str) -> str:
         full_path = repo_root / normalized
         if full_path.is_file():
             content = full_path.read_text(encoding="utf-8")
-            if len(content) > 12000:
-                content = content[:12000] + "\n... [TRUNCATED DUE TO CONTEXT LIMIT]"
+            # Truncate to ~3000 chars (approx 750 tokens) to leave room for rest of prompt
+            max_chars = 3000
+            if len(content) > max_chars:
+                content = content[:max_chars] + "\n... [TRUNCATED DUE TO CONTEXT LIMIT]"
             blocks.append(
                 f"\nCURRENT CONTENT of {normalized.as_posix()}:\n"
                 f"```python\n{content}\n```"
@@ -473,19 +500,27 @@ def _execute_code_generation(state: AgentState, client: Any) -> list[Any]:
 
     prompt = _build_local_code_gen_prompt(state)
     system_prompt = CODE_GENERATOR_SYSTEM_PROMPT
-        
-    original_content = _extract_file_content_for_task(state.task)
-    if not original_content and state.context_symbols:
-        original_content = _build_symbol_snippets(state.context_symbols)
-
-    if original_content:
-        lines = original_content.splitlines()
-        est_tokens = (len(prompt) + len(system_prompt)) // 4
-        logger.warning(f"code_generator_node: context lines={len(lines)}, estimated tokens={est_tokens}")
-        if est_tokens > 4000:
-            logger.warning(f"code_generator_node: Prompt token count ({est_tokens}) exceeds 4000. Context was truncated.")
-        first_lines = "\\n".join(lines[:3])
-        logger.warning(f"code_generator_node: First 3 lines of context: {first_lines}")
+    
+    # Calculate prompt stats for debugging
+    prompt_chars = len(prompt) + len(system_prompt)
+    est_tokens = prompt_chars // 4
+    logger.warning(
+        f"code_generator_node: prompt length={prompt_chars} chars, "
+        f"estimated {est_tokens} tokens"
+    )
+    
+    # Log context details
+    if state.context_symbols:
+        logger.warning(
+            f"code_generator_node: using {len(state.context_symbols)} context symbols"
+        )
+    
+    # Check if prompt exceeds reasonable limit for small models
+    if est_tokens > 4000:
+        logger.warning(
+            f"code_generator_node: Prompt token count ({est_tokens}) exceeds 4000. "
+            "Consider reducing context size."
+        )
 
     sr_blocks: list[Any] = []
     try:

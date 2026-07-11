@@ -180,7 +180,7 @@ class GroqClient:
 
     BASE_URL: ClassVar[str] = "https://api.groq.com/openai/v1/chat/completions"
     MODEL: ClassVar[str] = "llama-3.1-8b-instant"
-    TIMEOUT_SECONDS: ClassVar[int] = 120
+    TIMEOUT_SECONDS: ClassVar[int] = 300  # 5 minutes for larger models
     
     @property
     def API_KEY(self) -> str:
@@ -200,7 +200,7 @@ class GroqClient:
             "model": config.groq_model,
             "messages": messages,
             "temperature": 0.0,
-            "max_tokens": 2048,
+            "max_tokens": 4096,  # Increased for larger models and search-replace output
         }
         
         headers = {

@@ -47,6 +47,9 @@ filterwarnings = [
     "ignore:.*:DeprecationWarning:langchain_core.*",
     "ignore:.*:DeprecationWarning:langgraph.*",
 ]
+markers = [
+    "llm_required: Tests that require any LLM provider (Groq or Ollama) for AI-powered contract fixing",
+]
 
 [tool.mypy]
 python_version = "3.11"
