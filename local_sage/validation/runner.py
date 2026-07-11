@@ -409,13 +409,13 @@ class ValidationRunner:
             List of ``ContractFailure`` objects.
         """
         # Contracts live inside the temp copy so the patched state is what
-        # gets validated — not the original repo.  A missing or empty dir
-        # must fail loudly rather than silently returning zero violations.
+        # gets validated — not the original repo.
         contracts_dir = temp_dir / "contracts"
+
+        # Guard: if the real repo has contracts but the temp copy doesn't, that
+        # indicates the patch copy step is incomplete.  Warn loudly so this
+        # never silently passes as "zero violations".
         if not contracts_dir.exists() or not any(contracts_dir.iterdir()):
-            # No contracts to check is acceptable (project may have none yet),
-            # but if the contracts dir exists in the real repo we expected it to
-            # be copied.  Log a warning and skip rather than masking a copy bug.
             real_contracts = self._repo_root / "contracts"
             if real_contracts.exists() and any(real_contracts.iterdir()):
                 import warnings
@@ -424,7 +424,10 @@ class ValidationRunner:
                     f"temp copy {temp_dir} — patch copy step may be incomplete.",
                     stacklevel=2,
                 )
-            return []
+            # Fall through: ContractChecker.check() handles a missing/empty dir
+            # gracefully by returning [], so we always call it rather than
+            # short-circuiting here (which would bypass any mock in tests).
+
         contract_failures = self._contract_checker.check(
             contracts_dir=contracts_dir,
             source_dir=temp_dir
