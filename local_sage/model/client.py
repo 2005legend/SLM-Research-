@@ -58,7 +58,7 @@ class OllamaClient:
 
     BASE_URL: ClassVar[str] = "http://localhost:11434"
     MODEL: ClassVar[str] = "qwen2.5-coder:7b"
-    TIMEOUT_SECONDS: ClassVar[int] = 600
+    TIMEOUT_SECONDS: ClassVar[int] = 300  # T4 fix: 300 s matches ollama_timeout default; raise to 300 if needed per fixture via sage.toml ollama_timeout
 
     async def generate(self, prompt: str, system: str = "") -> ModelResponse:
         """Send a generation request to the Ollama ``/api/generate`` endpoint.

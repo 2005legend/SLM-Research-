@@ -1,4 +1,5 @@
 ollama_model = "qwen2.5-coder:7b"
+ollama_timeout = 300  # T4 fix: 300 s (was 120); prevents retry before model finishes, which caused format drift
 mypy_timeout = 300
 pytest_timeout = 120
 ruff_timeout = 60

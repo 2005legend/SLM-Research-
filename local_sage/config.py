@@ -54,7 +54,7 @@ class SageConfig:
     groq_model: str = "llama-3.1-8b-instant"
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "qwen2.5-coder:7b"
-    ollama_timeout: int = 120
+    ollama_timeout: int = 300  # raised from 120 — T4 fix: give model enough time before retry triggers format drift
     max_retries: int = 3
     pytest_timeout: int = 60
     mypy_timeout: int = 60

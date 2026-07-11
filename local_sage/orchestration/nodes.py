@@ -48,6 +48,14 @@ API_CODE_GENERATOR_SYSTEM_PROMPT: str = (
     "Do NOT use search/replace blocks or diffs. Include the ENTIRE file content with your changes applied."
 )
 
+# Injected as a prefix on every retry (attempt 2+) to counteract the format
+# drift that models exhibit after a first failure or timeout.
+RETRY_FORMAT_REMINDER: str = (
+    "Output ONLY a SEARCH/REPLACE block. "
+    "Do NOT use markdown code fences (no ```python). "
+    "Do NOT include any explanation text before or after the block."
+)
+
 
 def planner_node(state: AgentState) -> dict[str, Any]:
     """Generate a high-level plan from the task description.
@@ -500,7 +508,18 @@ def _execute_code_generation(state: AgentState, client: Any) -> list[Any]:
 
     prompt = _build_local_code_gen_prompt(state)
     system_prompt = CODE_GENERATOR_SYSTEM_PROMPT
-    
+
+    # On retry attempts (retry_count >= 1) prepend RETRY_FORMAT_REMINDER to
+    # the system prompt.  Format drift is observed specifically after the first
+    # failure/timeout, not on the initial call.
+    is_retry = state.retry_count >= 1
+    if is_retry:
+        system_prompt = RETRY_FORMAT_REMINDER + "\n\n" + system_prompt
+        logger.warning(
+            "code_generator_node: retry attempt %d — prepending RETRY_FORMAT_REMINDER",
+            state.retry_count,
+        )
+
     # Calculate prompt stats for debugging
     prompt_chars = len(prompt) + len(system_prompt)
     est_tokens = prompt_chars // 4
@@ -508,13 +527,13 @@ def _execute_code_generation(state: AgentState, client: Any) -> list[Any]:
         f"code_generator_node: prompt length={prompt_chars} chars, "
         f"estimated {est_tokens} tokens"
     )
-    
+
     # Log context details
     if state.context_symbols:
         logger.warning(
             f"code_generator_node: using {len(state.context_symbols)} context symbols"
         )
-    
+
     # Check if prompt exceeds reasonable limit for small models
     if est_tokens > 4000:
         logger.warning(
@@ -526,10 +545,10 @@ def _execute_code_generation(state: AgentState, client: Any) -> list[Any]:
     try:
         response = asyncio.run(client.generate(prompt=prompt, system=system_prompt))
         sr_blocks = ModelOutputParser().extract_search_replace_blocks(response.text)
-            
+
         if not sr_blocks:
             logger.warning("no search-replace blocks found in model output")
     except Exception as exc:  # noqa: BLE001
         logger.warning("code_generator_node: generate failed: %s", exc)
-        
+
     return sr_blocks

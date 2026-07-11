@@ -536,7 +536,11 @@ class ContractChecker:
         str_repo = str(repo_dir)
         inserted = str_repo not in sys.path
         if inserted:
-            sys.path.insert(0, str_repo)
+            # Append rather than insert(0) so we never shadow packages that
+            # were placed on sys.path earlier (e.g. the project root set by the
+            # harness bootstrap).  The project root must stay ahead of fixture
+            # paths on every task run, not just the first one.
+            sys.path.append(str_repo)
         try:
             module = importlib.import_module(module_path)
         finally:
