@@ -1,0 +1,92 @@
+﻿Γ£ù Validation failed.
+Validation failed. Please fix the following issues:
+
+
+MYPY (9 error(s)):
+  - local_sage\orchestration\state.py:53:16: error: Missing type arguments for 
+generic type "list"  
+  - local_sage\validation\patcher.py:74:69: error: Missing type arguments for 
+generic type "list"  
+  - local_sage\validation\patcher.py:89:61: error: Missing type arguments for 
+generic type "list"  
+  - local_sage\validation\patcher.py:256:57: error: Missing type arguments for 
+generic type "list"  
+  - local_sage\validation\runner.py:171:47: error: Missing type arguments for 
+generic type "list"  
+  - local_sage\orchestration\nodes.py:128:16: error: Missing type arguments for
+generic type "list"  
+  - local_sage\orchestration\nodes.py:365:45: error: Missing type arguments for
+generic type "list"  
+  - local_sage\orchestration\nodes.py:402:41: error: Missing type arguments for
+generic type "list"  
+  - local_sage\cli.py:68:47: error: Missing type arguments for generic type 
+"tuple"  
+
+RUFF (24 violation(s)):
+  - 
+C:\Users\ksida\AppData\Local\Temp\tmpy8lqjkqa\evals\repos\fixtures\simple_api\r
+un_vague_prompt.py:3:8: F401 `os` imported but unused
+  - C:\Users\ksida\AppData\Local\Temp\tmpy8lqjkqa\local_sage\cli.py:19:1: E402 
+Module level import not at top of file
+  - C:\Users\ksida\AppData\Local\Temp\tmpy8lqjkqa\local_sage\cli.py:20:1: E402 
+Module level import not at top of file
+  - C:\Users\ksida\AppData\Local\Temp\tmpy8lqjkqa\local_sage\cli.py:21:1: E402 
+Module level import not at top of file
+  - C:\Users\ksida\AppData\Local\Temp\tmpy8lqjkqa\local_sage\cli.py:22:1: E402 
+Module level import not at top of file
+  - C:\Users\ksida\AppData\Local\Temp\tmpy8lqjkqa\local_sage\cli.py:24:1: E402 
+Module level import not at top of file
+  - C:\Users\ksida\AppData\Local\Temp\tmpy8lqjkqa\local_sage\cli.py:59:101: 
+E501 Line too long (103 > 100)
+  - C:\Users\ksida\AppData\Local\Temp\tmpy8lqjkqa\local_sage\cli.py:78:5: I001 
+Import block is un-sorted or un-formatted
+  - 
+C:\Users\ksida\AppData\Local\Temp\tmpy8lqjkqa\local_sage\orchestration\nodes.py
+:17:37: F401 `local_sage.agent.parser.ModelOutputParser` imported but unused
+  - 
+C:\Users\ksida\AppData\Local\Temp\tmpy8lqjkqa\local_sage\orchestration\nodes.py
+:124:41: F811 Redefinition of unused `ModelOutputParser` from line 17: 
+`ModelOutputParser` redefined here
+  - 
+C:\Users\ksida\AppData\Local\Temp\tmpy8lqjkqa\local_sage\orchestration\nodes.py
+:178:48: UP037 Remove quotes from type annotation
+  - 
+C:\Users\ksida\AppData\Local\Temp\tmpy8lqjkqa\local_sage\orchestration\nodes.py
+:178:49: F821 Undefined name `ValidationResult`
+  - 
+C:\Users\ksida\AppData\Local\Temp\tmpy8lqjkqa\local_sage\orchestration\nodes.py
+:212:5: I001 Import block is un-sorted or un-formatted
+  - 
+C:\Users\ksida\AppData\Local\Temp\tmpy8lqjkqa\local_sage\validation\pytest_runn
+er.py:76:13: SIM105 Use `contextlib.suppress(OSError)` instead of 
+`try`-`except`-`pass`
+  - 
+C:\Users\ksida\AppData\Local\Temp\tmpy8lqjkqa\local_sage\validation\pytest_runn
+er.py:81:101: E501 Line too long (102 > 100)
+  - 
+C:\Users\ksida\AppData\Local\Temp\tmpy8lqjkqa\local_sage\validation\pytest_runn
+er.py:91:13: SIM105 Use `contextlib.suppress(OSError)` instead of 
+`try`-`except`-`pass`
+  - 
+C:\Users\ksida\AppData\Local\Temp\tmpy8lqjkqa\local_sage\validation\pytest_runn
+er.py:103:36: UP015 Unnecessary mode argument
+  - 
+C:\Users\ksida\AppData\Local\Temp\tmpy8lqjkqa\tests\validation\test_patcher.py:
+221:1: E402 Module level import not at top of file
+  - 
+C:\Users\ksida\AppData\Local\Temp\tmpy8lqjkqa\tests\validation\test_patcher.py:
+223:1: E402 Module level import not at top of file
+  - 
+C:\Users\ksida\AppData\Local\Temp\tmpy8lqjkqa\tests\validation\test_patcher.py:
+223:8: F811 Redefinition of unused `pytest` from line 13: `pytest` redefined 
+here
+  - 
+C:\Users\ksida\AppData\Local\Temp\tmpy8lqjkqa\tests\validation\test_patcher.py:
+224:1: E402 Module level import not at top of file
+  - 
+C:\Users\ksida\AppData\Local\Temp\tmpy8lqjkqa\tests\validation\test_patcher.py:
+225:1: E402 Module level import not at top of file
+  - 
+C:\Users\ksida\AppData\Local\Temp\tmpy8lqjkqa\tests\validation\test_patcher.py:
+452:9: I001 Import block is un-sorted or un-formatted
+  - .:0:0: FORMAT One or more files are not formatted correctly

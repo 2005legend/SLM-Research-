@@ -4,6 +4,7 @@ patch = '''--- a/local_sage/config.py
 +++ b/local_sage/config.py
 @@ -1,4 +1,4 @@
 -"""Configuration management for local-sage.
+<<<<<<< Updated upstream
 +"""Configuration management for local-sage — patched by sage validate test.
  
  Loads ``SageConfig`` from (in priority order):
@@ -12,3 +13,13 @@ patch = '''--- a/local_sage/config.py
 
 Path("test_patch.diff").write_text(patch, encoding="utf-8")
 print("patch written")
+=======
++"""Configuration management for local-sage — test patch.
+ 
+ Loads ``SageConfig`` from (in priority order):
+ 1. Environment variables prefixed with ``SAGE_`` (highest priority).
+ '''
+
+Path('test_patch.diff').write_text(patch, encoding='utf-8')
+print('patch written')
+>>>>>>> Stashed changes
