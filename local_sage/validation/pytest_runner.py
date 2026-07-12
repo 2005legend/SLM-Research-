@@ -45,7 +45,7 @@ class PytestRunner:
         print(counts.failed)  # number of failing tests
     """
 
-    def run(self, repo_dir: Path, timeout: int = 60) -> PytestCounts:
+    def run(self, repo_dir: Path, target_files: list[Path] | None = None, timeout: int = 60) -> PytestCounts:
         """Run pytest in *repo_dir* and return pass/fail/error counts.
 
         Invokes ``python -m pytest --tb=short --json-report
@@ -54,6 +54,7 @@ class PytestRunner:
 
         Args:
             repo_dir: Path to the repository root to run pytest in.
+            target_files: Optional list of specific files to test.
             timeout: Maximum seconds to wait for pytest to complete.
 
         Returns:
@@ -67,7 +68,33 @@ class PytestRunner:
         fd, report_path = tempfile.mkstemp(suffix=".json")
         os.close(fd)
 
-        cmd = _PYTEST_CMD + [f"--json-report-file={report_path}"]
+        paths: list[str] = []
+        if target_files:
+            for p in target_files:
+                if p.name.startswith("test_") or p.name.endswith("_test.py") or "tests" in p.parts:
+                    paths.append(str(p.absolute() if p.is_absolute() else p))
+                else:
+                    try:
+                        if "local_sage" in p.parts:
+                            idx = p.parts.index("local_sage")
+                            test_path = repo_dir / "tests" / Path(*p.parts[idx+1:-1]) / f"test_{p.name}"
+                        else:
+                            test_path = repo_dir / "tests" / Path(*p.parts[:-1]) / f"test_{p.name}"
+                            
+                        if test_path.exists():
+                            paths.append(str(test_path))
+                    except ValueError:
+                        pass
+            
+            # If target files were provided but none mapped to tests, skip running pytest
+            if not paths:
+                try:
+                    os.remove(report_path)
+                except OSError:
+                    pass
+                return PytestCounts(passed=0, failed=0, errors=0)
+
+        cmd = _PYTEST_CMD + [f"--json-report-file={report_path}"] + (paths if paths else [])
 
         try:
             self._execute_pytest(cmd, repo_dir, timeout, report_path)

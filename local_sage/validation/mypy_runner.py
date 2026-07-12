@@ -22,7 +22,6 @@ _MYPY_CMD = [
     sys.executable,
     "-m",
     "mypy",
-    "local_sage/",
     "--show-column-numbers",
     "--no-error-summary",
 ]
@@ -49,16 +48,17 @@ class MypyRunner:
             print(err.file_path, err.line, err.message)
     """
 
-    def run(self, repo_dir: Path, timeout: int = 60) -> list[MypyError]:
+    def run(self, repo_dir: Path, target_files: list[Path] | None = None, timeout: int = 60) -> list[MypyError]:
         """Run mypy in *repo_dir* and return a list of type errors.
 
-        Invokes ``python -m mypy local_sage/ --show-column-numbers
+        Invokes ``python -m mypy ... --show-column-numbers
         --no-error-summary`` as a subprocess.  Only lines matching the
         ``<file>:<line>:<col>: error: <msg> [<code>]`` pattern are
         returned; all other output is ignored.
 
         Args:
             repo_dir: Path to the repository root to run mypy in.
+            target_files: Optional list of specific files to check.
             timeout: Maximum seconds to wait for mypy to complete.
 
         Returns:
@@ -70,9 +70,11 @@ class MypyRunner:
             ValidationTimeoutError: If mypy does not complete within
                 *timeout* seconds.
         """
+        paths = [str(p.absolute() if p.is_absolute() else p) for p in target_files] if target_files else ["local_sage/"]
+        cmd = _MYPY_CMD + paths
         try:
             result = subprocess.run(
-                _MYPY_CMD,
+                cmd,
                 cwd=repo_dir,
                 capture_output=True,
                 text=True,

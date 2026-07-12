@@ -180,3 +180,122 @@ def test_extract_diff_result_always_contains_dashes_when_not_none(s: str) -> Non
             f"Input  : {s!r}\n"
             f"Output : {result!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Forgiving parser fallback tests
+# (based on exact raw outputs from qwen2.5-coder:7b observed in live harness)
+# ---------------------------------------------------------------------------
+
+
+class TestFallbackExtractSearchReplaceBlocks:
+    """Forgiving fallback tests for extract_search_replace_blocks.
+
+    Each test uses a raw string that mirrors the exact (or near-exact)
+    output observed during live harness runs.  The strict form is always
+    tested first as a control.
+    """
+
+    def test_strict_form_still_works(self, parser: ModelOutputParser) -> None:
+        """Strict <<<<<<< SEARCH / >>>>>>> REPLACE is always the first choice."""
+        raw = (
+            "<<<<<<< SEARCH\n"
+            "def func1(): return 'A'\n"
+            "=======\n"
+            "def func1(): return 'C'\n"
+            ">>>>>>> REPLACE\n"
+        )
+        blocks = parser.extract_search_replace_blocks(raw)
+        assert len(blocks) == 1
+        assert blocks[0].search == "def func1(): return 'A'"
+        assert blocks[0].replace == "def func1(): return 'C'"
+
+    def test_angle_bracket_fallback_no_labels(self, parser: ModelOutputParser) -> None:
+        """Angled brackets without SEARCH/REPLACE text labels are accepted."""
+        raw = (
+            "<<<<<<\n"
+            "def func1(): return 'A'\n"
+            "=======\n"
+            "def func1(): return 'C'\n"
+            ">>>>>>>\n"
+        )
+        blocks = parser.extract_search_replace_blocks(raw)
+        assert len(blocks) == 1
+        assert "func1" in blocks[0].search
+        assert "'C'" in blocks[0].replace
+
+    def test_keyword_colon_form_fenced(self, parser: ModelOutputParser) -> None:
+        """SEARCH: / REPLACE: colon form inside ```plaintext fences is parsed.
+
+        This is the primary format-drift pattern from qwen2.5-coder:7b.
+        """
+        raw = (
+            "1. Loop control variable not used:\n"
+            "   ```plaintext\n"
+            "   SEARCH: def func1(): return 'A'\n"
+            "   REPLACE: def func1(): return 'C'\n"
+            "   ```\n"
+        )
+        blocks = parser.extract_search_replace_blocks(raw)
+        assert len(blocks) == 1
+        assert "'A'" in blocks[0].search
+        assert "'C'" in blocks[0].replace
+
+    def test_keyword_colon_multiple_pairs(self, parser: ModelOutputParser) -> None:
+        """Multiple SEARCH: / REPLACE: pairs are all extracted."""
+        raw = (
+            "SEARCH: old_func1\n"
+            "REPLACE: new_func1\n"
+            "SEARCH: old_func2\n"
+            "REPLACE: new_func2\n"
+        )
+        blocks = parser.extract_search_replace_blocks(raw)
+        assert len(blocks) == 2
+        assert "old_func1" in blocks[0].search
+        assert "old_func2" in blocks[1].search
+
+    def test_bare_keyword_section_form(self, parser: ModelOutputParser) -> None:
+        """Bare SEARCH / REPLACE section headings (no colons, no brackets) are parsed."""
+        raw = (
+            "SEARCH\n"
+            "def func1(): return 'A'\n"
+            "REPLACE\n"
+            "def func1(): return 'C'\n"
+        )
+        blocks = parser.extract_search_replace_blocks(raw)
+        assert len(blocks) == 1
+        assert "'A'" in blocks[0].search
+        assert "'C'" in blocks[0].replace
+
+    def test_strict_preferred_when_both_forms_present(
+        self, parser: ModelOutputParser
+    ) -> None:
+        """Strict blocks are returned even when loose form also appears."""
+        raw = (
+            "<<<<<<< SEARCH\n"
+            "strict_search\n"
+            "=======\n"
+            "strict_replace\n"
+            ">>>>>>> REPLACE\n"
+            "\n"
+            "SEARCH: loose_search\n"
+            "REPLACE: loose_replace\n"
+        )
+        blocks = parser.extract_search_replace_blocks(raw)
+        # Must return only the strict block — loose fallback should not fire
+        assert len(blocks) == 1
+        assert blocks[0].search == "strict_search"
+
+    def test_empty_string_returns_empty_list(self, parser: ModelOutputParser) -> None:
+        """Empty input yields an empty list from both phases."""
+        assert parser.extract_search_replace_blocks("") == []
+
+    def test_pure_prose_returns_empty_list(self, parser: ModelOutputParser) -> None:
+        """Plain prose with no recognisable pattern yields an empty list."""
+        assert (
+            parser.extract_search_replace_blocks(
+                "Sure! I'd be happy to help with that change."
+            )
+            == []
+        )
+

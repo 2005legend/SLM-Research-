@@ -28,7 +28,14 @@ class ModelOutputParser:
     def extract_search_replace_blocks(self, raw: str) -> list[SearchReplaceBlock]:
         """Extract all SEARCH/REPLACE blocks from *raw*.
 
-        Each block has the form::
+        Two-phase extraction — strict first, forgiving fallback only when
+        the strict pass yields nothing.  Preserving the strict path as the
+        primary ensures existing passing benchmarks are unaffected; the
+        fallback addresses the format-drift observed in 7 B-parameter models
+        that wrap output in markdown fences or use "SEARCH:" / "REPLACE:"
+        keyword syntax instead of the angled-bracket delimiters.
+
+        Strict form (must appear verbatim)::
 
             <<<<<<< SEARCH
             <exact text to find>
@@ -36,12 +43,86 @@ class ModelOutputParser:
             <replacement text>
             >>>>>>> REPLACE
 
+        Accepted fallback forms (tried in order):
+
+        1. Angled-bracket block without "SEARCH"/"REPLACE" labels::
+
+               <<<<<<< ...
+               <search>
+               =======
+               <replace>
+               >>>>>>> ...
+
+        2. Keyword-colon form (with optional markdown fences inside)::
+
+               SEARCH: <search text>
+               REPLACE: <replace text>
+
+        3. Bare-keyword block form::
+
+               SEARCH
+               <search text>
+               REPLACE
+               <replace text>
+               (next SEARCH or end)
+
+        Markdown fences (``` …language… ```) are stripped from the text
+        before the fallback patterns are applied.
+
         Args:
             raw: Raw text from the model.
 
         Returns:
             List of :class:`SearchReplaceBlock` objects (may be empty).
         """
+        # --- Phase 1: strict <<<<<<< SEARCH / >>>>>>> REPLACE ---
+        blocks = self._extract_strict_blocks(raw)
+        if blocks:
+            return blocks
+
+        # --- Phase 2: forgiving fallbacks ---
+        cleaned = self._strip_markdown_fences(raw)
+
+        blocks = self._extract_angle_bracket_blocks(cleaned)
+        if blocks:
+            import logging
+            logging.getLogger(__name__).debug(
+                "parser: used angle-bracket fallback (%d blocks)", len(blocks)
+            )
+            return blocks
+
+        blocks = self._extract_keyword_colon_blocks(cleaned)
+        if blocks:
+            import logging
+            logging.getLogger(__name__).debug(
+                "parser: used SEARCH:/REPLACE: colon fallback (%d blocks)", len(blocks)
+            )
+            return blocks
+
+        blocks = self._extract_hybrid_blocks(cleaned)
+        if blocks:
+            import logging
+            logging.getLogger(__name__).debug(
+                "parser: used hybrid SEARCH/======= fallback (%d blocks)", len(blocks)
+            )
+            return blocks
+
+        blocks = self._extract_bare_keyword_blocks(cleaned)
+        if blocks:
+            import logging
+            logging.getLogger(__name__).debug(
+                "parser: used bare SEARCH/REPLACE keyword fallback (%d blocks)", len(blocks)
+            )
+            return blocks
+
+        return []
+
+    # ------------------------------------------------------------------
+    # Strict extraction (original implementation, unchanged)
+    # ------------------------------------------------------------------
+
+    def _extract_strict_blocks(self, raw: str) -> list[SearchReplaceBlock]:
+        """Extract blocks using the exact <<<<<<< / >>>>>>> delimiters."""
         blocks: list[SearchReplaceBlock] = []
         remaining = raw
         while True:
@@ -49,7 +130,6 @@ class ModelOutputParser:
             if block is None:
                 break
             blocks.append(block)
-            # Advance past the consumed block
             end_marker = ">>>>>>> REPLACE"
             idx = remaining.find(end_marker)
             if idx == -1:
@@ -93,6 +173,86 @@ class ModelOutputParser:
         replace_text = text[after_sep:end].rstrip("\n")
 
         return SearchReplaceBlock(search=search_text, replace=replace_text)
+
+    # ------------------------------------------------------------------
+    # Forgiving fallback helpers
+    # ------------------------------------------------------------------
+
+    def _strip_markdown_fences(self, text: str) -> str:
+        """Remove ``` language ``` fence wrappers, keeping inner content.
+
+        Handles ```python, ```plaintext, ```py, and plain ``` fences.
+        Does not recurse — only one level of fences is stripped.
+        """
+        import re
+        return re.sub(r"```[a-z]*\n?", "", text)
+
+    def _extract_angle_bracket_blocks(self, text: str) -> list[SearchReplaceBlock]:
+        """Accept <<< / >>> blocks that lack the SEARCH/REPLACE labels.
+
+        Some models emit the angled-bracket structure but drop the keyword
+        labels after the opening/closing markers.
+        """
+        import re
+        pattern = re.compile(
+            r"<{3,}.*?\n(.*?)\n={3,}\s*\n(.*?)\n>{3,}",
+            re.DOTALL,
+        )
+        return [
+            SearchReplaceBlock(search=m.group(1).strip(), replace=m.group(2).strip())
+            for m in pattern.finditer(text)
+            if m.group(1).strip()
+        ]
+
+    def _extract_hybrid_blocks(self, text: str) -> list[SearchReplaceBlock]:
+        """Accept hybrid forms like SEARCH\\n...\\n=======\\n... (with or without >>>>>>> REPLACE)."""
+        import re
+        pattern = re.compile(
+            r"SEARCH.*?\n(.*?)\n={3,}\s*\n(.*?)(?=\n>{3,}|\nSEARCH.*?\n|\Z)",
+            re.DOTALL,
+        )
+        return [
+            SearchReplaceBlock(search=m.group(1).strip(), replace=m.group(2).strip())
+            for m in pattern.finditer(text)
+            if m.group(1).strip()
+        ]
+
+    def _extract_keyword_colon_blocks(self, text: str) -> list[SearchReplaceBlock]:
+        """Accept "SEARCH: <text> REPLACE: <text>" conversational form.
+
+        The model consistently emits this when reminded via
+        RETRY_FORMAT_REMINDER but still doesn't nail the strict delimiters.
+        Leading/trailing whitespace and embedded blank lines are preserved
+        in the captured content.
+        """
+        import re
+        pattern = re.compile(
+            r"SEARCH:\s*(.+?)\s*REPLACE:\s*(.+?)(?=\nSEARCH:|\Z)",
+            re.DOTALL,
+        )
+        return [
+            SearchReplaceBlock(search=m.group(1).strip(), replace=m.group(2).strip())
+            for m in pattern.finditer(text)
+            if m.group(1).strip()
+        ]
+
+    def _extract_bare_keyword_blocks(self, text: str) -> list[SearchReplaceBlock]:
+        """Accept bare SEARCH / REPLACE section headings with body text.
+
+        Handles output where the model uses SEARCH and REPLACE as plain
+        section headers on their own lines without colons or brackets.
+        """
+        import re
+        pattern = re.compile(
+            r"^SEARCH\s*\n(.*?)\nREPLACE\s*\n(.*?)(?=\nSEARCH\s*\n|\Z)",
+            re.DOTALL | re.MULTILINE,
+        )
+        return [
+            SearchReplaceBlock(search=m.group(1).strip(), replace=m.group(2).strip())
+            for m in pattern.finditer(text)
+            if m.group(1).strip()
+        ]
+
 
     def extract_diff(self, raw: str) -> str | None:
         """Return the diff substring from *raw*, or ``None`` if not found.

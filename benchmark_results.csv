@@ -1,0 +1,6 @@
+Model,Task 1 Result,Task 2 Result,Task 3 Result,First Failure Type,Retry Count,Final Outcome,Notes on Syntax Drift / Ambiguity
+Llama 3.1 8B,Pass,Pass,Pass,None,0,Pass all,"Modified intent in T1 (""D"" instead of ""C"") but passed syntactic bounds. Successfully expanded context natively for T3 ambiguity."
+Qwen 2.5 Coder 7B,Pass,Pass,Fail,Ambiguous SEARCH block,3,Failed all,Perfect instruction fidelity on T1/T2. Failed T3 due to identical string return hello. Could not recover context on retry.
+Qwen 2.5 Coder 7B (Prompt Eng.),Pass,Pass,Fail,Instruction Dropping / Format Drift,3,Failed all,"Instructed to expand context on retry. Understood instruction but dropped formatting entirely; reverted to diff format."
+DeepSeek-Coder 6.7B,Pass,Pass,Fail,Ambiguous SEARCH block,3,Failed all,Emergent reasoning on T2 (updated docstring). Failed T3 ambiguity trap. Hallucinated completely made-up SEARCH/REPLACE syntax on final retry.
+Qwen 3.5 9B,Pass,Pass,Fail,Ambiguous SEARCH block,3,Failed all,Emergent reasoning on T2 (updated docstring). Failed T3 ambiguity trap identically to DeepSeek. Failed to recover context.

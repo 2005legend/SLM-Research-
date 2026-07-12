@@ -113,7 +113,13 @@ def context_retriever_node(state: AgentState) -> dict[str, Any]:
     selector = ContextSelector()
     query = state.task + " " + " ".join(state.plan)
     context_symbols = selector.select(query, graph, top_k=config.top_k_context)
-    logger.warning(f"DEBUG: graph nodes={graph._graph.number_of_nodes()}, query='{query}', found={len(context_symbols)} symbols")
+    logger.warning(
+        "DEBUG: graph nodes=%d, query=%r, found=%d symbols: %s",
+        graph._graph.number_of_nodes(),
+        query[:80],
+        len(context_symbols),
+        [s.file_path for s in context_symbols],
+    )
 
     # Search wiki for relevant entries
     wiki_dir = repo_root / config.wiki_dir
@@ -163,6 +169,7 @@ def validator_node(state: AgentState) -> dict[str, Any]:
     Returns:
         A dict with ``"validation_result"`` set to the ``ValidationResult``.
     """
+    import re
     from local_sage.validation.runner import ValidationRunner
 
     config = load_config()
@@ -175,8 +182,14 @@ def validator_node(state: AgentState) -> dict[str, Any]:
         ruff_timeout=config.ruff_timeout,
     )
     blocks = state.sr_blocks or []
+    
+    target_file = None
+    task_files = re.findall(r"[\w/\\]+\.py\b", state.task)
+    if task_files:
+        target_file = task_files[0]
+        
     try:
-        result = runner.validate_search_replace(blocks)
+        result = runner.validate_search_replace(blocks, target_file=target_file)
     except Exception as exc:  # noqa: BLE001
         result = _make_validator_failure(exc)
     return {"validation_result": result}
@@ -202,6 +215,7 @@ def _make_validator_failure(exc: Exception) -> "ValidationResult":  # type: igno
         ruff_violations=None,
         contract_failures=None,
         duration_ms=0,
+        confidence_score=0,
     )
 
 
@@ -216,22 +230,29 @@ def apply_patch_node(state: AgentState) -> dict[str, Any]:
     Returns:
         An empty dict (side effect only).
     """
+    import re
     from local_sage.validation.patcher import Patcher
     from local_sage.validation.exceptions import PatchError
 
     repo_root = Path.cwd()
     blocks = state.sr_blocks or []
     if not blocks:
-        logger.warning("apply_patch_node called with no blocks â€” skipping")
+        logger.warning("apply_patch_node called with no blocks — skipping")
         return {}
+        
+    target_file = None
+    task_files = re.findall(r"[\w/\\]+\.py\b", state.task)
+    if task_files:
+        target_file = task_files[0]
+        
     patcher = Patcher()
     try:
-        patcher.apply_search_replace(repo_root, blocks)
+        patcher.apply_search_replace(repo_root, blocks, target_file=target_file)
         logger.info("Search-replace blocks applied to repository successfully")
     except PatchError as exc:
-        logger.error("apply_patch_node: PatchError â€” %s", exc.message)
+        logger.error("apply_patch_node: PatchError — %s", exc.message)
     except Exception as exc:  # noqa: BLE001
-        logger.error("apply_patch_node: unexpected error applying blocks â€” %s", exc)
+        logger.error("apply_patch_node: unexpected error applying blocks — %s", exc)
     return {}
 
 
@@ -306,9 +327,15 @@ def _build_local_code_gen_prompt(state: AgentState) -> str:
 
     Includes actual file content for any file path mentioned in the task
     so the model generates diffs with correct context lines.
-    
+
     Uses windowed context for better token efficiency when context_symbols
-    are available.
+    are available.  If the task names a .py file that is not among the
+    retrieved context symbols (e.g. a newly created temp file that was not
+    in the stale index), the file is read directly from disk and injected
+    so the model always sees the target file content.
+
+    On retries the validation failure section is capped at 800 chars to
+    prevent prompt blowup caused by large ruff/mypy outputs.
 
     Args:
         state: Current agent state.
@@ -316,48 +343,120 @@ def _build_local_code_gen_prompt(state: AgentState) -> str:
     Returns:
         A formatted prompt string for the code generator.
     """
+    import re
     from local_sage.agent.context import get_windowed_context
-    
+
+    repo_root = Path.cwd()
     parts: list[str] = [f"Task: {state.task}\n"]
     if state.plan:
         parts.append("Plan:\n" + "\n".join(f"  {i + 1}. {s}" for i, s in enumerate(state.plan)))
 
-    # Prefer windowed context from context_symbols for better token efficiency
-    if state.context_symbols:
-        repo_root = Path.cwd()
+    # --- Context: windowed symbol context OR direct file injection ---
+    target_file_shown = False
+    
+    context_symbols = state.context_symbols
+    if context_symbols and not _task_file_matches_symbol(state.task, context_symbols[0]):
+        logger.warning(
+            "_build_local_code_gen_prompt: top symbol %s does not match task file, clearing stale context",
+            getattr(context_symbols[0], 'file_path', 'unknown')
+        )
+        context_symbols = []
+
+    if context_symbols:
         # Use the first (most relevant) symbol for windowed context
-        target_symbol = state.context_symbols[0]
+        target_symbol = context_symbols[0]
         windowed = get_windowed_context(target_symbol, repo_root, context_lines=20)
         if windowed:
             parts.append(
                 f"\nTARGET FILE: {target_symbol.file_path}\n"
                 f"```python\n{windowed}\n```"
             )
+            target_file_shown = True
             logger.debug(
-                f"_build_local_code_gen_prompt: using windowed context for "
-                f"{target_symbol.file_path}, {len(windowed.splitlines())} lines"
+                "_build_local_code_gen_prompt: using windowed context for "
+                "%s, %d lines",
+                target_symbol.file_path,
+                len(windowed.splitlines()),
             )
         else:
             # Fall back to symbol snippets if windowed context fails
-            snippets = _build_symbol_snippets(state.context_symbols)
+            snippets = _build_symbol_snippets(context_symbols)
             parts.append(f"\nRelevant code:\n{snippets}")
-    else:
-        # No context symbols, try to extract from task
+            target_file_shown = True
+
+    # Direct file fallback: if the task explicitly names a .py file that is
+    # not reflected in the retrieved symbols, inject the file content directly.
+    # This handles newly-created files absent from a stale graph index.
+    if not target_file_shown:
         file_content_block = _extract_file_content_for_task(state.task)
         if file_content_block:
             parts.append(file_content_block)
+            target_file_shown = True
 
+    # If still not shown, try simple direct read
+    if not target_file_shown:
+        py_match = re.search(r"([\w/\\]+\.py)", state.task)
+        if py_match:
+            candidate = repo_root / py_match.group(1).replace("\\", "/")
+            if candidate.is_file():
+                content = candidate.read_text(encoding="utf-8")
+                rel = candidate.relative_to(repo_root).as_posix()
+                if len(content) > 3000:
+                    content = content[:3000] + "\n... [TRUNCATED]"
+                parts.append(f"\nTARGET FILE: {rel}\n```python\n{content}\n```")
+                target_file_shown = True
+                logger.debug(
+                    "_build_local_code_gen_prompt: direct-inject fallback for %s", rel
+                )
+    
+    if not target_file_shown:
+         logger.warning("_build_local_code_gen_prompt: could not find/inject any target file content!")
+
+    # --- Wiki context (top 3 entries, 300 chars each) ---
     if state.wiki_context:
         wiki_text = "\n\n".join(f"## {e.title}\n{e.content[:300]}" for e in state.wiki_context[:3])
         parts.append(f"\nWiki context:\n{wiki_text}")
+
+    # --- Retry feedback (capped at 800 chars to prevent prompt blowup) ---
     if state.validation_result is not None and not state.validation_result.passed:
-        parts.append(f"\nPrevious attempt failed:\n{state.validation_result.to_retry_prompt()}")
+        retry_text = state.validation_result.to_retry_prompt()
+        if len(retry_text) > 800:
+            retry_text = retry_text[:800] + "\n... [truncated — focus on the first error]"
+        parts.append(f"\nPrevious attempt failed:\n{retry_text}")
+
     parts.append(
         "\nProduce SEARCH/REPLACE blocks. "
-        "Context lines MUST be copied exactly from the file content shown above â€” "
+        "Context lines MUST be copied exactly from the file content shown above — "
         "do not guess or reconstruct lines from memory."
     )
     return "\n".join(parts)
+
+
+def _task_file_matches_symbol(task: str, symbol: Any) -> bool:
+    """Return True if the .py filename in *task* matches *symbol*'s file path.
+
+    Used to detect when the top retrieved symbol is from a different file than
+    the one explicitly named in the task string (stale-index mismatch).
+
+    Args:
+        task: Natural-language task string that may contain a .py path.
+        symbol: A ``SymbolInfo`` object with a ``file_path`` attribute.
+
+    Returns:
+        ``True`` if the task's named file appears in the symbol's file path.
+    """
+    import re
+    from pathlib import Path
+    task_files = re.findall(r"[\w/\\]+\.py\b", task)
+    if not task_files:
+        return True  # no explicit file in task — assume match
+        
+    symbol_path = str(getattr(symbol, "file_path", "") or "")
+    if not symbol_path:
+        return False
+        
+    symbol_name = Path(symbol_path).name
+    return any(Path(f).name == symbol_name for f in task_files)
 
 
 def _extract_file_content_for_task(task: str, use_windowed: bool = False) -> str:
@@ -547,7 +646,7 @@ def _execute_code_generation(state: AgentState, client: Any) -> list[Any]:
         sr_blocks = ModelOutputParser().extract_search_replace_blocks(response.text)
 
         if not sr_blocks:
-            logger.warning("no search-replace blocks found in model output")
+            logger.warning("no search-replace blocks found in model output. Raw output:\n%s", response.text)
     except Exception as exc:  # noqa: BLE001
         logger.warning("code_generator_node: generate failed: %s", exc)
 

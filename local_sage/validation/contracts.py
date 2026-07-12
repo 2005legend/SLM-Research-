@@ -614,7 +614,7 @@ class ContractChecker:
             logger.warning("Failed to read source file %s: %s", source_file, exc)
             return None
 
-    async def _get_model_client(self):
+    async def _get_model_client(self) -> Any | None:
         """Get a language model client (provider-agnostic)."""
         try:
             from local_sage.model.client import get_client
@@ -628,7 +628,7 @@ class ContractChecker:
         failure: ContractFailure, 
         contract: Contract, 
         original_code: str, 
-        client
+        client: Any
     ) -> str | None:
         """Generate a fix using the model and apply it."""
         system_prompt = self._build_system_prompt()

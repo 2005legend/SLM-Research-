@@ -45,11 +45,12 @@ class RuffRunner:
             print(v.rule_code, v.message)
     """
 
-    def run(self, repo_dir: Path, timeout: int = 30) -> list[RuffViolation]:
+    def run(self, repo_dir: Path, target_files: list[Path] | None = None, timeout: int = 30) -> list[RuffViolation]:
         """Run ruff check and ruff format --check in *repo_dir*.
 
         Args:
             repo_dir: Path to the repository root to run ruff in.
+            target_files: Optional list of specific files to check.
             timeout: Maximum seconds to wait for each ruff subprocess.
                 Applied independently to the check and format calls.
 
@@ -64,8 +65,8 @@ class RuffRunner:
                 complete within *timeout* seconds.
         """
         violations: list[RuffViolation] = []
-        violations.extend(self._run_check(repo_dir, timeout))
-        format_violation = self._run_format_check(repo_dir, timeout)
+        violations.extend(self._run_check(repo_dir, target_files, timeout))
+        format_violation = self._run_format_check(repo_dir, target_files, timeout)
         if format_violation is not None:
             violations.append(format_violation)
         return violations
@@ -74,11 +75,12 @@ class RuffRunner:
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _run_check(self, repo_dir: Path, timeout: int) -> list[RuffViolation]:
+    def _run_check(self, repo_dir: Path, target_files: list[Path] | None, timeout: int) -> list[RuffViolation]:
         """Run ``ruff check --output-format=json .`` and parse violations.
 
         Args:
             repo_dir: Repository root directory.
+            target_files: Optional list of specific files to check.
             timeout: Subprocess timeout in seconds.
 
         Returns:
@@ -88,9 +90,11 @@ class RuffRunner:
         Raises:
             ValidationTimeoutError: If the subprocess times out.
         """
+        paths = [str(p.absolute() if p.is_absolute() else p) for p in target_files] if target_files else ["."]
+        cmd = _RUFF_CHECK_CMD[:-1] + paths
         try:
             result = subprocess.run(
-                _RUFF_CHECK_CMD,
+                cmd,
                 cwd=repo_dir,
                 capture_output=True,
                 text=True,
@@ -105,11 +109,12 @@ class RuffRunner:
 
         return self._parse_check_output(result.stdout)
 
-    def _run_format_check(self, repo_dir: Path, timeout: int) -> RuffViolation | None:
+    def _run_format_check(self, repo_dir: Path, target_files: list[Path] | None, timeout: int) -> RuffViolation | None:
         """Run ``ruff format --check .`` and return a violation if unformatted.
 
         Args:
             repo_dir: Repository root directory.
+            target_files: Optional list of specific files to check.
             timeout: Subprocess timeout in seconds.
 
         Returns:
@@ -118,9 +123,11 @@ class RuffRunner:
         Raises:
             ValidationTimeoutError: If the subprocess times out.
         """
+        paths = [str(p.absolute() if p.is_absolute() else p) for p in target_files] if target_files else ["."]
+        cmd = _RUFF_FORMAT_CMD[:-1] + paths
         try:
             result = subprocess.run(
-                _RUFF_FORMAT_CMD,
+                cmd,
                 cwd=repo_dir,
                 capture_output=True,
                 text=True,

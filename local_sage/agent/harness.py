@@ -178,7 +178,6 @@ class HarnessExecutor:
         for task in tasks:
             if not self._execute_single_task(task, session_id, sm, config):
                 passed = False
-                break
 
         return HarnessResult(passed=passed)
 
@@ -211,6 +210,9 @@ class HarnessExecutor:
             return True
         else:
             sm.update_task_status(session_id, task.id, "failed")
+            if result and hasattr(result, "failures"):
+                for f in result.failures:
+                    print(f"Task {task.id} VALIDATION FAIL [{f.tool}]: {f.message}")
             return False
 
     def _build_task_context(self, previous_summaries: list[TaskSummary]) -> str:

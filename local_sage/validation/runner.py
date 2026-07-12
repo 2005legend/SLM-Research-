@@ -120,9 +120,9 @@ class ValidationRunner:
         if key in self._cache:
             return self._cache[key]
 
-        temp_dir = self._patcher.apply_to_temp(self._repo_root, patch)
+        temp_dir, changed_files = self._patcher.apply_to_temp(self._repo_root, patch)
         try:
-            result = self._run_all_checks(temp_dir)
+            result = self._run_all_checks(temp_dir, changed_files)
             self._cache[key] = result
             return self._finalize_apply(result, patch)
         finally:
@@ -161,15 +161,15 @@ class ValidationRunner:
         if key in self._cache:
             return self._cache[key]
 
-        temp_dir = self._patcher.apply_to_temp(self._repo_root, patch)
+        temp_dir, changed_files = self._patcher.apply_to_temp(self._repo_root, patch)
         try:
-            result = self._run_all_checks(temp_dir)
+            result = self._run_all_checks(temp_dir, changed_files)
             self._cache[key] = result
             return result
         finally:
             self._patcher.revert(temp_dir)
 
-    def validate_search_replace(self, blocks: list[Any]) -> ValidationResult:
+    def validate_search_replace(self, blocks: list[Any], target_file: str | None = None) -> ValidationResult:
         """Validate search-replace blocks without applying them to the repo.
 
         Applies the blocks to a temporary copy and runs all four validators.
@@ -177,6 +177,7 @@ class ValidationRunner:
 
         Args:
             blocks: List of SearchReplaceBlock objects to validate.
+            target_file: Optional explicit file name from task to resolve ambiguities.
 
         Returns:
             A :class:`~local_sage.validation.result.ValidationResult`.
@@ -190,13 +191,13 @@ class ValidationRunner:
         if key in self._cache:
             return self._cache[key]
         try:
-            temp_dir = self._patcher.apply_search_replace_to_temp(
-                self._repo_root, blocks
+            temp_dir, changed_files = self._patcher.apply_search_replace_to_temp(
+                self._repo_root, blocks, target_file
             )
         except Exception as exc:  # noqa: BLE001
             return self._pre_check_failure(str(exc))
         try:
-            result = self._run_all_checks(temp_dir)
+            result = self._run_all_checks(temp_dir, changed_files)
             self._cache[key] = result
             return result
         finally:
@@ -256,7 +257,7 @@ class ValidationRunner:
             duration_ms=0,
         )
 
-    def _run_all_checks(self, temp_dir: Path) -> ValidationResult:
+    def _run_all_checks(self, temp_dir: Path, changed_files: list[Path] | None = None) -> ValidationResult:
         """Run all four validators against *temp_dir* and aggregate results.
 
         All four validators are always attempted regardless of individual
@@ -265,6 +266,7 @@ class ValidationRunner:
 
         Args:
             temp_dir: Patched copy of the repository to validate against.
+            changed_files: Optional list of files that were modified by the patch.
 
         Returns:
             Aggregated :class:`~local_sage.validation.result.ValidationResult`.
@@ -275,9 +277,9 @@ class ValidationRunner:
         start_ms = int(time.time() * 1000)
         failures: list[ValidationFailure] = []
 
-        pytest_counts = self._run_pytest(temp_dir, failures)
-        mypy_errors = self._run_mypy(temp_dir, failures)
-        ruff_violations = self._run_ruff(temp_dir, failures)
+        pytest_counts = self._run_pytest(temp_dir, failures, changed_files)
+        mypy_errors = self._run_mypy(temp_dir, failures, changed_files)
+        ruff_violations = self._run_ruff(temp_dir, failures, changed_files)
         contract_failures = self._run_contracts(temp_dir, failures)
 
         duration_ms = int(time.time() * 1000) - start_ms
@@ -318,13 +320,14 @@ class ValidationRunner:
         )
 
     def _run_pytest(
-        self, temp_dir: Path, failures: list[ValidationFailure]
+        self, temp_dir: Path, failures: list[ValidationFailure], target_files: list[Path] | None = None
     ) -> PytestCounts | None:
         """Run pytest and append any failure to *failures*.
 
         Args:
             temp_dir: Directory to run pytest in.
             failures: Mutable list to append failures to.
+            target_files: Optional list of specific files to test.
 
         Returns:
             ``PytestCounts`` or ``None`` on timeout (which re-raises).
@@ -333,7 +336,7 @@ class ValidationRunner:
             ValidationTimeoutError: If pytest times out.
         """
 
-        counts = self._pytest_runner.run(temp_dir, self._pytest_timeout)
+        counts = self._pytest_runner.run(temp_dir, target_files, self._pytest_timeout)
         if counts.failed > 0 or counts.errors > 0:
             failures.append(
                 ValidationFailure(
@@ -344,13 +347,14 @@ class ValidationRunner:
         return counts
 
     def _run_mypy(
-        self, temp_dir: Path, failures: list[ValidationFailure]
+        self, temp_dir: Path, failures: list[ValidationFailure], target_files: list[Path] | None = None
     ) -> list[MypyError] | None:
         """Run mypy and append any failure to *failures*.
 
         Args:
             temp_dir: Directory to run mypy in.
             failures: Mutable list to append failures to.
+            target_files: Optional list of specific files to test.
 
         Returns:
             List of ``MypyError`` objects.
@@ -358,7 +362,7 @@ class ValidationRunner:
         Raises:
             ValidationTimeoutError: If mypy times out.
         """
-        errors = self._mypy_runner.run(temp_dir, self._mypy_timeout)
+        errors = self._mypy_runner.run(temp_dir, target_files, self._mypy_timeout)
         if errors:
             failures.append(
                 ValidationFailure(
@@ -369,13 +373,14 @@ class ValidationRunner:
         return errors
 
     def _run_ruff(
-        self, temp_dir: Path, failures: list[ValidationFailure]
+        self, temp_dir: Path, failures: list[ValidationFailure], target_files: list[Path] | None = None
     ) -> list[RuffViolation] | None:
         """Run ruff check and format and append any failure to *failures*.
 
         Args:
             temp_dir: Directory to run ruff in.
             failures: Mutable list to append failures to.
+            target_files: Optional list of specific files to check.
 
         Returns:
             List of ``RuffViolation`` objects.
@@ -383,7 +388,7 @@ class ValidationRunner:
         Raises:
             ValidationTimeoutError: If ruff times out.
         """
-        violations = self._ruff_runner.run(temp_dir, self._ruff_timeout)
+        violations = self._ruff_runner.run(temp_dir, target_files, self._ruff_timeout)
         if violations:
             failures.append(
                 ValidationFailure(
