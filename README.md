@@ -1,97 +1,158 @@
 # local-sage
 
-## Problem
+<p align="center">
+  <strong>Local coding-agent scaffold and benchmark harness for studying reliability boundaries in small language models.</strong>
+</p>
 
-Small local language models like Qwen2.5 Coder 7B can generate plausible code, but they fail in predictable ways: malformed diffs, wrong exception types, missing edge-case handling, and context drift across multi-file changes. Running a raw model against a repository produces patches that look correct but break tests, type checks, or declared contracts.
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.10%2B-blue" />
+  <img src="https://img.shields.io/badge/Ollama-local%20LLM-black" />
+  <img src="https://img.shields.io/badge/License-MIT-green" />
+  <img src="https://img.shields.io/badge/Status-Research%20Prototype-orange" />
+</p>
 
-local-sage addresses this by wrapping a 7B model in a **validation-gated agent loop** that refuses to apply any patch until it passes pytest, mypy, ruff, and YAML contract checks on a temporary copy of the repository.
+<p align="center">
+  <a href="#overview">Overview</a> •
+  <a href="#motivation">Motivation</a> •
+  <a href="#research-question">Research Question</a> •
+  <a href="#benchmark">Benchmark</a> •
+  <a href="#results">Results</a> •
+  <a href="#repository-structure">Repository Structure</a> •
+  <a href="#setup">Setup</a> •
+  <a href="#citation">Citation</a>
+</p>
 
-## How It Works
+---
 
-local-sage is organised into six layers:
+## Overview
 
-1. **Model (Layer 1)** — `OllamaClient` calls Qwen2.5 Coder 7B via `localhost:11434`. All inference stays on-device.
-2. **Orchestration (Layer 2)** — LangGraph nodes (`planner → context_retriever → code_generator → validator → memory_writer`) coordinate the agent loop with retry on validation failure.
-3. **Repo Graph (Layer 3)** — tree-sitter parses Python into a NetworkX symbol graph; Personalized PageRank selects the most relevant context for each task.
-4. **Session Memory (Layer 4)** — SQLite stores task history, token counts, and observations; Mem0 provides semantic search over past decisions.
-5. **Wiki (Layer 5)** — the agent maintains a markdown knowledge base that accumulates insights across tasks.
-6. **Validation (Layer 6)** — every patch is pre-checked, applied to a temp copy via `whatthepatch`, and must pass pytest + mypy + ruff + `ContractChecker` before touching real files.
+**local-sage** is a local, repo-aware coding assistant and research benchmark framework designed to evaluate how small and mid-sized local language models behave on code-editing tasks under strict validation and patch-application constraints.
 
-The `ModelOutputParser` (in `local_sage/agent/`) extracts clean unified diffs from raw model output regardless of surrounding prose or code fences.
+The project began as an attempt to scaffold a practical local coding assistant for bug fixing and small development tasks. It later evolved into a controlled benchmark and failure-analysis framework for studying reliability boundaries in local coding agents.
 
-## Quick Start
+### Core contributions
+- A local coding-agent scaffold targeting resource-constrained hardware.
+- A strict patch-validation and application pipeline.
+- A benchmark harness for controlled multi-model comparisons.
+- A failure taxonomy for ambiguity, formatting drift, and retry exhaustion.
+- A reproducible experimental setup for studying model capability versus orchestration correctness.
 
-```bash
-# Install dependencies
-pip install -e ".[dev]"
+---
 
-# Start Ollama and pull the model
-ollama pull qwen2.5-coder:7b
+## Motivation
 
-# Initialise and start the agent
-sage start
+Current local coding-agent setups often report only end-to-end success or failure, which hides the true source of failure. In practice, failures may originate from weak context selection, patch-format drift, ambiguous search blocks, validation noise, retry-loop collapse, or actual model reasoning limitations.
 
-# Run a coding task
-sage task "fix the divide-by-zero bug in simple_api/core.py"
+This repository is built around the idea that a coding agent should not only be evaluated by whether it “works,” but by **where** it fails, **why** it fails, and whether those failures are attributable to the model, the harness, or the validation stack.
 
-# Run the full benchmark suite
-python evals/runner.py
+---
 
-# Run the baseline (raw Ollama, no scaffolding)
-python evals/baseline.py
+## Research Question
+
+> **Which failure modes in local coding agents are caused by the model itself, and which are caused by orchestration, patch matching, context selection, or validation design?**
+
+---
+
+## Benchmark
+
+The benchmark is designed to stress not just code generation, but **edit targeting**, **format stability**, **validation resilience**, and **ambiguity resolution**.
+
+### Task classes
+| Task Type | Description | Example Failure Signal |
+|---|---|---|
+| Direct single-file edit | Small local edit with clear unique target | incorrect replacement |
+| Formatting-sensitive edit | Correct semantic change but style/format must remain valid | ruff violation |
+| Ambiguous multi-match edit | Search text matches multiple locations | pre-check ambiguity rejection |
+| Retry-recovery task | Model must recover from a prior rejection | syntax drift / parse failure |
+
+---
+
+## Results
+
+### Summary table
+
+| Model | Task 1 | Task 2 | Task 3 (Ambiguity) | Main Failure Mode |
+|---|---|---|---|---|
+| llama3.1:8b | PASS | PASS | PASS | Native context expansion |
+| deepseek-coder:6.7b | PASS | PASS | FAIL | Pre-check ambiguity rejection & hallucinated syntax |
+| qwen2.5-coder:7b | PASS | PASS | FAIL | Pre-check ambiguity rejection & Format drift |
+| qwen3.5:9b | PASS | PASS | FAIL | Pre-check ambiguity rejection |
+
+### Failure taxonomy
+
+| Category | Description |
+|---|---|
+| Pre-check ambiguity | SEARCH text matched multiple valid locations and was correctly rejected |
+| Format drift | Model abandoned required patch syntax and emitted unified diff or prose under cognitive load |
+| Hallucinated syntax | Model hallucinated completely invalid XML patch structures on retry |
+| Retry exhaustion | Model received structured feedback but failed to recover within retry budget |
+
+### Main finding
+The benchmark clearly isolates ambiguity-handling failures under strict patch matching. The results suggest that models in the <10B parameter class (with the exception of Llama 3.1 8B) lack the native reasoning capability to expand their search context windows when targeting ambiguous code lines. Furthermore, explicitly prompting these models to fix the ambiguity often induces cognitive overload, resulting in severe format drift or hallucinated patch structures.
+
+---
+
+## Repository Structure
+
+```text
+local-sage/
+├── README.md
+├── LICENSE
+├── CONTRIBUTING.md
+├── .gitignore
+├── local_sage/       # Core framework logic (agents, validation, memory)
+├── examples/         # Example usage and development scripts
+├── docs/             # Research paper, taxonomy, and methodology
+├── results/          # Tabular datasets and logs
+└── tests/            # Test harness for the agent capabilities
 ```
 
-## Benchmark Results
+---
 
-*Preliminary evaluation on a sample dataset:*
+## Setup
 
-| Agent | Pass Rate |
-|---|---|
-| Raw Qwen | 48% |
-| local-sage | 82% |
+### 1. Clone the repository
+```bash
+git clone https://github.com/2005legend/SLM-Research-.git
+cd SLM-Research
+```
 
-*(Note: We are actively expanding our evaluation suite to include harder tasks like cross-file refactoring, API migrations, and race condition fixes to better demonstrate the system's strengths against raw baselines.)*
+### 2. Create environment & Install
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -e .
+```
 
-## Research Contributions
+### 3. Pull benchmark models
+```bash
+ollama pull qwen2.5-coder:7b
+ollama pull deepseek-coder:6.7b
+ollama pull llama3.1:8b
+ollama pull qwen3.5:9b
+```
 
-To our knowledge, we are unaware of an open-source local coding agent combining declarative YAML contracts with AST-based pre-merge validation. The core of this is the **validation gate**: a deterministic, multi-tool check that runs before any patch is applied to the real repository.
+---
 
-- **ContractChecker** — loads YAML contracts from `contracts/` and statically verifies that each symbol's `exception_types` and `return_shape` match the source code via AST walking and `typing.get_type_hints()`. **Note: The checker validates statically observable properties (syntax and declared interface), not actual runtime behavior.**
-- **pytest** — functional correctness against the existing test suite.
-- **mypy** — static type safety.
-- **ruff** — lint and format compliance.
+## Citation
 
-Together, these four validators catch the structural failure modes of small local models without requiring a larger or smarter model. The agent retries with diagnostic feedback until all checks pass or the retry budget is exhausted.
+If you use this repository, cite both the codebase and the associated paper.
 
-## Future Directions & Roadmap
+```bibtex
+@misc{localsage2026,
+  author       = {<AUTHOR_NAME>},
+  title        = {local-sage: A Local Coding Agent Benchmark for Small Language Models},
+  year         = {2026},
+  howpublished = {GitHub repository},
+  url          = {https://github.com/2005legend/SLM-Research-}
+}
+```
 
-Based on early evaluation, several areas of improvement have been identified for future research:
+---
 
-1. **Richer Contract Language**: Evolving from simple interface checking to formal specification:
-   ```yaml
-   preconditions:
-     - x > 0
-   postconditions:
-     - result >= x
-     - len(result) > 0
-   exceptions:
-     - ValueError
-   mutates:
-     - cache
-   side_effects:
-     - writes logs
-   ```
-   *Preconditions and postconditions could be verified using symbolic execution tools like CrossHair or icontract instead of serving as documentation only.*
-2. **Deep Return Checking**: Moving beyond superficial type hints to verify semantic properties (e.g., returns positive int, sorted list).
-3. **Control-Flow Analysis**: Supplementing AST traversal with Control Flow Graphs (CFG) and Data Flow Graphs (DFG) to verify resources are closed, variables are initialized, and exceptions are handled.
-4. **Harder Evaluation Tasks**: Expanding benchmarks to include cross-file refactoring, API migrations, renaming public interfaces, dependency upgrades, and new feature additions.
-5. **Memory Management**: Addressing long-term knowledge staleness with memory invalidation, versioning, and contradiction resolution.
-6. **Hybrid Graph Retrieval**: Enhancing PageRank with hybrid scoring: `semantic similarity + graph distance + recency + file importance + git history`.
-7. **Patch Confidence Scoring**: Scoring generated patches before validation (`files touched + graph distance + contract violations + diff size + model confidence`) to reject obviously risky edits.
+## Paper
 
-## Acknowledgements
-
-- [Aider](https://aider.chat) for the repomap / Personalized PageRank context selection approach.
-- [Ollama](https://ollama.ai) for local model serving.
-- [LangGraph](https://langchain-ai.github.io/langgraph/) for agent orchestration.
-- [whatthepatch](https://github.com/cscorley/whatthepatch) for pure-Python unified diff application.
+- Draft paper: [`docs/paper/paper.md`](./docs/paper/paper.md)
+- Benchmark protocol: [`docs/benchmark_protocol.md`](./docs/benchmark_protocol.md)
+- Failure taxonomy: [`docs/failure_taxonomy.md`](./docs/failure_taxonomy.md)
+- Reproducibility guide: [`docs/reproducibility.md`](./docs/reproducibility.md)
