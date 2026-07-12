@@ -90,3 +90,24 @@ Enforcing a rigid `count == 1` rule in the patching layer acts as a perfect diag
 
 ## 6. Conclusion
 This study demonstrates that the true bottleneck for local coding agents using <10B parameter models is not code generation, but spatial ambiguity resolution and format adherence under stress. While Llama 3.1 8B demonstrated a unique native capacity to expand its edit context, other highly capable coding models (Qwen, DeepSeek) routinely fell into ambiguity traps and suffered severe format drift when prompted to recover. Future local assistant orchestration must either employ softer, fuzzier matching algorithms or utilize models with significantly higher cognitive capacity to handle strict formatting and disambiguation simultaneously.
+
+---
+
+## 7. Future Work
+
+To elevate this framework toward full production-readiness and larger-scale academic evaluation, we identify several critical areas for future improvement:
+
+### 7.1 Hybrid Context Selection & Git History
+Current context selection relies on static AST parsing and PageRank over repository symbols. Real-world software context is highly temporal; weighting context retrieval using **git recency**, **co-change frequency**, **bug history**, and **embedding similarity** would likely outperform static structural metrics alone.
+
+### 7.2 Scalability to Frontier Repositories
+The current benchmark validates capabilities on scoped dummy fixtures. Future evaluations must scale to real-world repository tasks (e.g., bug fixes in FastAPI, Django, Requests, or NumPy) to measure degradation in success rates as repository context sizes reach the 100k+ token limits.
+
+### 7.3 Runtime Learning & Memory Lifecycle
+The retry loop is currently deterministic and prompt-based. Adding an epistemic memory layer where failures are extracted, reasoned over, and pushed to a persistent "lessons learned" wiki would enable runtime learning. Furthermore, this memory requires version-awareness to prevent stale architectural memory from misguiding the agent after major refactors.
+
+### 7.4 Semantic Contracts
+While the current validation layer heavily utilizes syntactic constraints (Ruff, MyPy), defining advanced semantic contracts (e.g., invariants, side effects, function purity, and thread safety bounds) would provide much stronger guarantees than interface-level checks.
+
+### 7.5 Quantitative Profiling
+Future studies will expand the empirical dataset to include scaling laws, plotting **Context Size vs. Success Rate**, **Retry Budget vs. Patch Success**, and taxonomizing failure rates across a wider spectrum of model sizes (e.g., 7B vs. 14B).

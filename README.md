@@ -92,6 +92,16 @@ The benchmark clearly isolates ambiguity-handling failures under strict patch ma
 
 ---
 
+## Roadmap / Future Work
+
+- **Hybrid Context Selection:** Supplementing PageRank with git history (co-change frequency, bug history) and embedding similarity.
+- **Runtime Learning:** Moving from deterministic retries to updating memory upon patch failure to continuously improve future prompts.
+- **Semantic Contracts:** Upgrading validation from interface-level checks to strong semantic contracts (side effects, invariants, purity, thread safety).
+- **Scalability Experiments:** Validating success rate degradation on frontier repositories (e.g., FastAPI, Django, NumPy).
+- **Quantitative Profiling:** Taxonomizing failure rates vs context size and expanding evaluations across a broader spectrum of model sizes (e.g., 7B vs 14B).
+
+---
+
 ## Repository Structure
 
 ```text
