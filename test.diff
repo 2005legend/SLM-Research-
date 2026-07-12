@@ -1,9 +1,0 @@
---- a/simple_api/core.py
-+++ b/simple_api/core.py
-@@ -8,4 +8,6 @@
-     Raises:
-         ZeroDivisionError: When *b* is zero.
-     """
-+    if b == 0:
-+        raise ZeroDivisionError("division by zero")
-     return a / b

@@ -25,3 +25,11 @@ htmlcov/
 
 # Ruff
 .ruff_cache/
+
+# Test output and temporary files
+*output.txt
+pytest_*.txt
+pytest_*.json
+*.diff
+tmp_tasks/
+-
