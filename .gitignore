@@ -33,3 +33,4 @@ pytest_*.json
 *.diff
 tmp_tasks/
 -
+*.db
