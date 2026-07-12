@@ -9,7 +9,7 @@
 
 ## Abstract
 
-Local coding agents built on small language models (SLMs) are increasingly attractive for privacy-sensitive and cost-constrained development workflows, but their failures are often reported only as aggregate pass/fail outcomes. This obscures whether a failure originates from the model, the orchestration stack, the patching mechanism, or the validation design. This paper presents **local-sage**, a local coding-agent scaffold and benchmark harness for isolating failure sources in code-editing workflows. The framework enforces strict patch semantics, scoped validation, controlled fixtures, and structured retry feedback, enabling comparison across multiple local models under the same execution conditions. Across 4 local models (<10B parameter class) and 3 benchmark tasks, the study identifies distinct failure patterns including ambiguity rejection, exact-match drift, retry exhaustion, and format drift under cognitive load. The results show that only Llama 3.1 8B successfully resolved ambiguous edit targets natively under strict patch constraints, while other models (Qwen 2.5 7B, Qwen 3.5 9B, DeepSeek 6.7B) suffered severe format drift or hallucinated patch structures during recovery attempts. These findings suggest that local coding-agent reliability depends not only on raw model quality but also heavily on the interaction between patch format design, ambiguity handling, and retry orchestration.
+Local coding agents built on small language models (SLMs) are increasingly attractive for privacy-sensitive and cost-constrained development workflows, but their failures are often reported only as aggregate pass/fail outcomes. This obscures whether a failure originates from the model, the orchestration stack, the patching mechanism, or the validation design. This paper presents **local-sage**, a local coding-agent scaffold and benchmark harness for isolating failure sources in code-editing workflows. The framework enforces strict patch semantics, scoped validation, controlled fixtures, and structured retry feedback, enabling comparison across multiple local models under the same execution conditions. Across 4 local models (<10B parameter class) and 3 benchmark tasks, the study identifies distinct failure patterns including ambiguity rejection, exact-match drift, retry exhaustion, and format drift under increased prompt complexity. The results show that within the evaluated models, only Llama 3.1 8B successfully resolved ambiguous edit targets natively under strict patch constraints, while other models (Qwen 2.5 7B, Qwen 3.5 9B, DeepSeek 6.7B) suffered severe format drift or hallucinated patch structures during recovery attempts. These findings suggest that local coding-agent reliability depends not only on raw model quality but also heavily on the interaction between patch format design, ambiguity handling, and retry orchestration.
 
 ---
 
@@ -39,7 +39,7 @@ The benchmark is designed to stress not just code generation, but **edit targeti
 
 ### 2.2 Tasks
 - **Task 1 & Task 2 (Formatting & Syntax):** Modify isolated string returns (e.g., `returns "C"`). These test baseline instruction adherence, string formatting fidelity, and syntactic validity.
-- **Task 3 (The Ambiguity Trap):** Modify a string (`return "hello"`) that occurs in identical fashion in two different functions (`func3` and `func4`). This tests the model's capacity to recognize ambiguity and natively expand its context window (e.g., including the function signature) to uniquely identify the patch target.
+- **Task 3 (The Ambiguity Trap):** Modify a string (`return "hello"`) that occurs in identical fashion in two different functions (`func3` and `func4`). This tests the model's context-disambiguation capability to recognize ambiguity and expand its context window (e.g., including the function signature) to uniquely identify the patch target.
 
 ### 2.3 Models
 | Model | Params | Type | Local Serving |
@@ -63,12 +63,12 @@ The benchmark is designed to stress not just code generation, but **edit targeti
 | DeepSeek-Coder 6.7B | PASS | PASS | FAIL | 66% |
 
 ### 3.2 Qualitative analysis
-- **Llama 3.1 8B:** Drifted intent slightly on Task 1 (returning "D" instead of "C") but passed syntactic bounds. Successfully expanded context natively for the Task 3 ambiguity.
+- **Llama 3.1 8B:** Drifted intent slightly on Task 1 (returning "D" instead of "C") but passed syntactic bounds. Displayed context-disambiguation capability for the Task 3 ambiguity.
 - **Qwen 2.5 Coder 7B:** Perfect instruction fidelity on Task 1 and 2. Failed Task 3 due to the identical string `return "hello"`. Could not recover context on retry.
 - **DeepSeek-Coder 6.7B / Qwen 3.5 9B:** Exhibited emergent reasoning on Task 2 by autonomously updating the docstring (`"""Return B."""` -> `"""Return D."""`) to match the new return value. However, both failed the Task 3 ambiguity trap. DeepSeek hallucinated completely made-up SEARCH/REPLACE XML syntax on its final retry.
 
 ### 3.3 Prompt Engineering & Formatting Under Stress
-When Qwen 2.5 Coder 7B was explicitly prompted to expand its context upon failure, it understood the instruction but immediately dropped the `<<<<<<< SEARCH` formatting constraints entirely, reverting to a standard diff format. This highlights a cognitive load ceiling where SLMs cannot simultaneously balance strict XML-like structural formatting and complex reasoning instructions.
+When Qwen 2.5 Coder 7B was explicitly prompted to expand its context upon failure, it understood the instruction but immediately dropped the `<<<<<<< SEARCH` formatting constraints entirely, reverting to a standard diff format. This highlights the effects of increased prompt complexity, demonstrating that these models struggle to simultaneously balance strict XML-like structural formatting and complex reasoning instructions.
 
 ---
 
@@ -78,7 +78,7 @@ When Qwen 2.5 Coder 7B was explicitly prompted to expand its context upon failur
 The benchmark reveals that failures commonly attributed to "poor coding ability" in SLMs are often actually orchestration incompatibilities. Models like Qwen and DeepSeek perfectly understand the semantic requirement but fail to express it in the exact spatial format required by strict SEARCH/REPLACE parsers when ambiguity is present.
 
 ### 4.2 Why strict patching is useful diagnostically
-Enforcing a rigid `count == 1` rule in the patching layer acts as a perfect diagnostic sieve for spatial reasoning. It proves that most <10B models lack the native awareness that a line of code is non-unique within its parent file.
+Enforcing a rigid `count == 1` rule in the patching layer acts as a perfect diagnostic sieve for spatial reasoning. It proves that within the evaluated models, most <10B models lacked the context-disambiguation capability to realize that a line of code is non-unique within its parent file.
 
 ---
 

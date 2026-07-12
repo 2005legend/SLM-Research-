@@ -17,7 +17,7 @@ Task task_3 VALIDATION FAIL [pre_check]: No valid diff hunks found in patch — 
 ---
 
 ## 2. Format Drift & Instruction Dropping
-**Definition:** When subjected to cognitive overload—such as being explicitly prompted to resolve an ambiguity trap while maintaining a strict pseudo-XML syntax format—the model "drops" an instruction and outputs an invalid patch format.
+**Definition:** When subjected to increased prompt complexity—such as being explicitly prompted to resolve an ambiguity trap while maintaining a strict pseudo-XML syntax format—the model "drops" an instruction and outputs an invalid patch format.
 
 **Trigger Condition:** The model is fed a `RETRY_FORMAT_REMINDER` but abandons the `<<<<<<< SEARCH` format for a standard markdown code block or unified diff.
 
@@ -44,7 +44,7 @@ no search-replace blocks found in model output. Raw output:
 ---
 
 ## 3. Hallucinated Syntax
-**Definition:** Under repeated retries and failures, the model loses alignment entirely and hallucinates non-existent syntax for the patch block.
+**Definition:** Outputs that violate the required SEARCH/REPLACE grammar despite explicit formatting instructions. Under repeated retries and failures, the model loses alignment entirely and hallucinates non-existent syntax for the patch block.
 
 **Trigger Condition:** The model reaches the 2nd or 3rd retry attempt and produces completely unrecognized structural syntax.
 

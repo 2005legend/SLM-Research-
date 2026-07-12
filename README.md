@@ -73,7 +73,7 @@ The benchmark is designed to stress not just code generation, but **edit targeti
 
 | Model | Task 1 | Task 2 | Task 3 (Ambiguity) | Main Failure Mode |
 |---|---|---|---|---|
-| llama3.1:8b | PASS | PASS | PASS | Native context expansion |
+| llama3.1:8b | PASS | PASS | PASS | Context-disambiguation capability |
 | deepseek-coder:6.7b | PASS | PASS | FAIL | Pre-check ambiguity rejection & hallucinated syntax |
 | qwen2.5-coder:7b | PASS | PASS | FAIL | Pre-check ambiguity rejection & Format drift |
 | qwen3.5:9b | PASS | PASS | FAIL | Pre-check ambiguity rejection |
@@ -83,12 +83,12 @@ The benchmark is designed to stress not just code generation, but **edit targeti
 | Category | Description |
 |---|---|
 | Pre-check ambiguity | SEARCH text matched multiple valid locations and was correctly rejected |
-| Format drift | Model abandoned required patch syntax and emitted unified diff or prose under cognitive load |
-| Hallucinated syntax | Model hallucinated completely invalid XML patch structures on retry |
+| Format drift | Model abandoned required patch syntax and emitted unified diff or prose under increased prompt complexity |
+| Hallucinated syntax | Outputs that violate the required SEARCH/REPLACE grammar despite explicit formatting instructions |
 | Retry exhaustion | Model received structured feedback but failed to recover within retry budget |
 
 ### Main finding
-The benchmark clearly isolates ambiguity-handling failures under strict patch matching. The results suggest that models in the <10B parameter class (with the exception of Llama 3.1 8B) lack the native reasoning capability to expand their search context windows when targeting ambiguous code lines. Furthermore, explicitly prompting these models to fix the ambiguity often induces cognitive overload, resulting in severe format drift or hallucinated patch structures.
+The benchmark clearly isolates ambiguity-handling failures under strict patch matching. The results suggest that within the evaluated models, those in the <10B parameter class (with the exception of Llama 3.1 8B) struggled with the context-disambiguation capability to expand their search context windows when targeting ambiguous code lines. Furthermore, explicitly prompting these models to fix the ambiguity often induces increased prompt complexity, resulting in severe format drift or hallucinated patch structures.
 
 ---
 

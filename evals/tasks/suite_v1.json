@@ -1,0 +1,23 @@
+{
+    "description": "local-sage benchmark suite v1",
+    "tasks": [
+        {
+            "task_id": "task_1",
+            "category": "formatting",
+            "instruction": "Modify dummy_multi_1.py so func1 returns \"C\"",
+            "target_files": ["dummy_multi_1.py"]
+        },
+        {
+            "task_id": "task_2",
+            "category": "formatting",
+            "instruction": "Modify dummy_multi_2.py so func2 returns \"D\"",
+            "target_files": ["dummy_multi_2.py"]
+        },
+        {
+            "task_id": "task_3",
+            "category": "ambiguity",
+            "instruction": "Modify dummy_multi_3.py so func4 returns \"world\"",
+            "target_files": ["dummy_multi_3.py"]
+        }
+    ]
+}
